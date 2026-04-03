@@ -1,0 +1,188 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+:root {
+  --radius: 0.625rem;
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --canvas-fill: rgba(0, 103, 192, 0.04);
+  --grid-line-minor: rgba(25, 44, 66, 0.05);
+  --grid-line-major: rgba(25, 44, 66, 0.1);
+  --grid-bounds: rgba(0, 103, 192, 0.3);
+  --grid-origin: rgba(255, 75, 87, 0.38);
+  --device-fill: rgba(0, 103, 192, 0.08);
+  --device-stroke: rgba(0, 103, 192, 0.34);
+  --device-selected-stroke: rgba(0, 103, 192, 0.78);
+  --led-fill: rgba(16, 124, 16, 0.42);
+  --led-stroke: rgba(16, 124, 16, 0.78);
+  --led-off-fill: rgba(15, 23, 42, 0.10);
+  --led-off-stroke: rgba(15, 23, 42, 0.22);
+  --led-locked-fill: rgba(217, 138, 22, 0.42);
+  --led-locked-stroke: rgba(217, 138, 22, 0.82);
+  --led-lock-icon: rgba(255, 255, 255, 0.95);
+  --handle-fill: rgba(0, 103, 192, 0.88);
+  --handle-stroke: rgba(255, 255, 255, 0.90);
+  --rotate-handle-fill: rgba(0, 136, 255, 0.88);
+  --rotate-handle-stroke: rgba(255, 255, 255, 0.90);
+  --rotate-guide: rgba(0, 136, 255, 0.3);
+  --device-stale-fill: rgba(217, 138, 22, 0.08);
+  --device-stale-stroke: rgba(217, 138, 22, 0.42);
+  --led-ghost-stroke: rgba(0, 0, 0, 0.20);
+  --stale-warning: rgba(217, 138, 22, 0.92);
+
+  --card: rgba(255, 255, 255, 0.6);
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #0067c0;
+  --primary-foreground: #ffffff;
+  --secondary: #e5e5e5;
+  --secondary-foreground: #1a1a1a;
+  --muted: rgba(255, 255, 255, 0.6);
+  --muted-foreground: #5f5f5f;
+  --accent: rgba(0, 103, 192, 0.08);
+  --accent-foreground: #0067c0;
+  --destructive: #FF383C;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.1);
+  --input: rgba(0, 0, 0, 0.1);
+  --ring: #0067c0;
+
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #0067c0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(0, 103, 192, 0.08);
+  --sidebar-accent-foreground: #0067c0;
+  --sidebar-border: rgba(0, 0, 0, 0.1);
+  --sidebar-ring: #0067c0;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #202020;
+    --foreground: #ffffff;
+    --canvas-fill: rgba(255, 255, 255, 0.04);
+    --grid-line-minor: rgba(255, 255, 255, 0.05);
+    --grid-line-major: rgba(255, 255, 255, 0.10);
+    --grid-bounds: rgba(96, 205, 255, 0.3);
+    --grid-origin: rgba(255, 100, 100, 0.35);
+    --device-fill: rgba(96, 205, 255, 0.12);
+    --device-stroke: rgba(96, 205, 255, 0.44);
+    --device-selected-stroke: rgba(96, 205, 255, 0.84);
+    --led-fill: rgba(114, 207, 170, 0.46);
+    --led-stroke: rgba(114, 207, 170, 0.82);
+    --led-off-fill: rgba(255, 255, 255, 0.12);
+    --led-off-stroke: rgba(255, 255, 255, 0.18);
+    --led-locked-fill: rgba(255, 182, 77, 0.36);
+    --led-locked-stroke: rgba(255, 182, 77, 0.82);
+    --led-lock-icon: rgba(255, 248, 235, 0.96);
+    --handle-fill: rgba(96, 205, 255, 0.88);
+    --handle-stroke: rgba(255, 255, 255, 0.90);
+    --rotate-handle-fill: rgba(0, 145, 255, 0.9);
+    --rotate-handle-stroke: rgba(255, 255, 255, 0.90);
+    --rotate-guide: rgba(0, 145, 255, 0.3);
+    --device-stale-fill: rgba(255, 182, 77, 0.12);
+    --device-stale-stroke: rgba(255, 182, 77, 0.52);
+    --led-ghost-stroke: rgba(255, 255, 255, 0.22);
+    --stale-warning: rgba(255, 182, 77, 0.92);
+
+    --card: rgba(45, 45, 45, 0.5);
+    --card-foreground: #ffffff;
+    --popover: #202020;
+    --popover-foreground: #ffffff;
+    --primary: #60cdff;
+    --primary-foreground: #000000;
+    --secondary: #333333;
+    --secondary-foreground: #ffffff;
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: #d0d0d0;
+    --accent: rgba(96, 205, 255, 0.12);
+    --accent-foreground: #60cdff;
+    --destructive: #FF4245;
+    --destructive-foreground: #ffffff;
+    --border: rgba(255, 255, 255, 0.1);
+    --input: rgba(255, 255, 255, 0.1);
+    --ring: #60cdff;
+
+    --chart-1: oklch(0.488 0.243 264.376);
+    --chart-2: oklch(0.696 0.17 162.48);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
+    --sidebar: #202020;
+    --sidebar-foreground: #ffffff;
+    --sidebar-primary: #60cdff;
+    --sidebar-primary-foreground: #000000;
+    --sidebar-accent: rgba(96, 205, 255, 0.12);
+    --sidebar-accent-foreground: #60cdff;
+    --sidebar-border: rgba(255, 255, 255, 0.1);
+    --sidebar-ring: #60cdff;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

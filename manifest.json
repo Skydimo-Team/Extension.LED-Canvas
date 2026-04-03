@@ -1,0 +1,14 @@
+{
+  "id": "led_canvas",
+  "version": "1.0.0",
+  "name": "meta.name",
+  "publisher": "Skydimo",
+  "type": "extension",
+  "language": "lua",
+  "entry": "init.lua",
+  "page": "page/dist/index.html",
+  "permissions": [],
+  "description": "meta.description",
+  "repository": "https://github.com/skydimo/skydimo-plugins",
+  "license": "MIT"
+}
