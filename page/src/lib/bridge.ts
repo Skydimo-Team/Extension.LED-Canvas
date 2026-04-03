@@ -25,6 +25,54 @@ const PAGE: SkydimoExtPage = {
 }
 
 /* ── Layout types ── */
+export interface LocalizedText {
+  raw?: string
+  byLocale?: Record<string, string>
+}
+
+export interface EffectParamDependency {
+  key: string
+  equals?: unknown
+  not_equals?: unknown
+  behavior?: 'hide' | 'disable'
+}
+
+export interface EffectOptionInfo {
+  label?: LocalizedText
+  value: unknown
+}
+
+export interface EffectParamInfo {
+  type: string
+  key: string
+  label?: LocalizedText
+  group?: LocalizedText
+  dependency?: EffectParamDependency | null
+  default?: unknown
+  min?: number
+  max?: number
+  step?: number
+  fixedCount?: number | null
+  minCount?: number | null
+  maxCount?: number | null
+  options?: EffectOptionInfo[]
+}
+
+export interface EffectInfo {
+  id: string
+  name?: LocalizedText
+  description?: LocalizedText
+  group?: LocalizedText
+  icon?: string
+  params: EffectParamInfo[]
+}
+
+export interface LayoutVirtualDeviceState {
+  power_on: boolean
+  effect_id: string | null
+  effect_params: Record<string, unknown>
+}
+
 export interface LayoutInfo {
   id: string
   name: string
@@ -32,6 +80,7 @@ export interface LayoutInfo {
   canvas: CanvasBounds
   snap_to_grid: boolean
   placements: PlacedDevice[]
+  virtual_device: LayoutVirtualDeviceState
 }
 
 /* ── Store types ── */
@@ -41,6 +90,7 @@ interface BridgeState {
   status: ConnectionStatus
   devices: TreeDevice[]
   liveFramesByPort: Record<string, LedColor[]>
+  effects: EffectInfo[]
   /** All layouts from the backend */
   layouts: LayoutInfo[]
   /** Currently active layout id */
@@ -48,6 +98,7 @@ interface BridgeState {
 
   connect: () => void
   requestDevices: () => void
+  requestEffects: () => void
   requestFullState: () => void
   switchLayout: (layoutId: string) => void
   createLayout: (name: string) => void
@@ -58,6 +109,10 @@ interface BridgeState {
   syncPlacements: (layoutId: string, placed: PlacedDevice[], canvasBounds: CanvasBounds) => void
   updatePlacementBrightness: (layoutId: string, placementId: string, brightness: number) => void
   updateSnap: (layoutId: string, snap: boolean) => void
+  setVirtualDevicePower: (layoutId: string, powerOn: boolean) => void
+  setVirtualDeviceEffect: (layoutId: string, effectId: string | null) => void
+  updateVirtualDeviceEffectParams: (layoutId: string, params: Record<string, unknown>) => void
+  resetVirtualDeviceEffectParams: (layoutId: string) => void
   disconnect: () => void
 }
 
@@ -110,6 +165,51 @@ function normalizeLedColors(colors: unknown): LedColor[] {
   })
 }
 
+function normalizeVirtualDeviceState(value: unknown): LayoutVirtualDeviceState {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const effectId = typeof raw.effect_id === 'string' && raw.effect_id.trim().length > 0
+    ? raw.effect_id
+    : null
+  const effectParams = raw.effect_params && typeof raw.effect_params === 'object' && !Array.isArray(raw.effect_params)
+    ? raw.effect_params as Record<string, unknown>
+    : {}
+
+  return {
+    power_on: raw.power_on !== false,
+    effect_id: effectId,
+    effect_params: effectId ? effectParams : {},
+  }
+}
+
+function normalizeLayouts(layouts: unknown): LayoutInfo[] {
+  const rawLayouts = Array.isArray(layouts) ? layouts : []
+  return rawLayouts.flatMap((layout) => {
+    if (!layout || typeof layout !== 'object') return []
+    const raw = layout as LayoutInfo & Record<string, unknown>
+    return [{
+      ...raw,
+      placements: Array.isArray(raw.placements) ? raw.placements : [],
+      virtual_device: normalizeVirtualDeviceState(raw.virtual_device),
+    }]
+  })
+}
+
+function normalizeEffects(effects: unknown): EffectInfo[] {
+  const rawEffects = Array.isArray(effects) ? effects : []
+  return rawEffects.flatMap((effect) => {
+    if (!effect || typeof effect !== 'object') return []
+    const raw = effect as EffectInfo & Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    if (!id) return []
+
+    return [{
+      ...raw,
+      id,
+      params: Array.isArray(raw.params) ? raw.params : [],
+    }]
+  })
+}
+
 export const useBridgeStore = create<BridgeState>((set, get) => {
   function applyDeviceSnapshot(devices: unknown) {
     const normalized = normalizeDevices(devices)
@@ -138,8 +238,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
   function applyFullState(data: Record<string, unknown>) {
     if (!data) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const layouts: LayoutInfo[] = Array.isArray(data.layouts) ? data.layouts as any : []
+    const layouts = normalizeLayouts(data.layouts)
     set({
       layouts,
       activeLayoutId: (data.active_layout_id as string | undefined) ?? layouts[0]?.id ?? null,
@@ -149,9 +248,13 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
   function applyLayoutStatus(data: Record<string, unknown>) {
     if (!data?.layout) return
-    const updated = data.layout as LayoutInfo
+    const [updated] = normalizeLayouts([data.layout])
+    if (!updated) return
     set(s => {
-      const nextLayouts = s.layouts.map(l => l.id === updated.id ? updated : l)
+      const existingIndex = s.layouts.findIndex(l => l.id === updated.id)
+      const nextLayouts = existingIndex === -1
+        ? [...s.layouts, updated]
+        : s.layouts.map(l => l.id === updated.id ? updated : l)
       return {
         layouts: nextLayouts,
         ...(!hasAnyRegistered(nextLayouts) && { liveFramesByPort: {} }),
@@ -168,6 +271,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     ws.onopen = () => {
       set({ status: 'connected' })
       get().requestDevices()
+      get().requestEffects()
       get().requestFullState()
     }
 
@@ -212,6 +316,9 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
           if (data?.type === 'layout_status') {
             applyLayoutStatus(data as Record<string, unknown>)
           }
+          if (data?.type === 'effects_catalog') {
+            set({ effects: normalizeEffects((data as Record<string, unknown>).effects) })
+          }
         }
       }
     }
@@ -231,6 +338,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     status: 'disconnected',
     devices: [],
     liveFramesByPort: {},
+    effects: [],
     layouts: [],
     activeLayoutId: null,
 
@@ -238,6 +346,10 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
     requestDevices() {
       sendToExt({ type: 'get_devices' })
+    },
+
+    requestEffects() {
+      sendToExt({ type: 'get_effects_catalog' })
     },
 
     requestFullState() {
@@ -313,6 +425,22 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
       sendToExt({ type: 'update_snap', layout_id: layoutId, snap_to_grid: snap })
     },
 
+    setVirtualDevicePower(layoutId, powerOn) {
+      sendToExt({ type: 'set_layout_virtual_power', layout_id: layoutId, power_on: powerOn })
+    },
+
+    setVirtualDeviceEffect(layoutId, effectId) {
+      sendToExt({ type: 'set_layout_virtual_effect', layout_id: layoutId, effect_id: effectId })
+    },
+
+    updateVirtualDeviceEffectParams(layoutId, params) {
+      sendToExt({ type: 'update_layout_virtual_effect_params', layout_id: layoutId, params })
+    },
+
+    resetVirtualDeviceEffectParams(layoutId) {
+      sendToExt({ type: 'reset_layout_virtual_effect_params', layout_id: layoutId })
+    },
+
     disconnect() {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
       if (ws) { ws.close(); ws = null }
@@ -321,6 +449,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
         status: 'disconnected',
         devices: [],
         liveFramesByPort: {},
+        effects: [],
         layouts: [],
         activeLayoutId: null,
       })

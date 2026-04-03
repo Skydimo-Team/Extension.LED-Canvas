@@ -82,6 +82,113 @@ local function sanitize_brightness(value)
     return math.floor(math.max(0, math.min(100, n)) + 0.5)
 end
 
+local function clone_plain_value(value, seen)
+    if type(value) ~= "table" or value == json.null then
+        return value
+    end
+
+    seen = seen or {}
+    if seen[value] then
+        return seen[value]
+    end
+
+    local copy = {}
+    seen[value] = copy
+    for k, v in pairs(value) do
+        copy[clone_plain_value(k, seen)] = clone_plain_value(v, seen)
+    end
+    return copy
+end
+
+local function sanitize_virtual_device_params(value)
+    if type(value) ~= "table" or value == json.null then
+        return {}
+    end
+    return clone_plain_value(value)
+end
+
+local function normalize_virtual_device_config(value)
+    local raw = type(value) == "table" and value or {}
+    local effect_id = raw.effect_id
+    if type(effect_id) ~= "string" or effect_id == "" then
+        effect_id = nil
+    end
+
+    return {
+        power_on = raw.power_on ~= false,
+        effect_id = effect_id,
+        effect_params = effect_id and sanitize_virtual_device_params(raw.effect_params) or {},
+    }
+end
+
+local function get_effect_params_schema(effect_id)
+    if type(effect_id) ~= "string" or effect_id == "" then
+        return {}
+    end
+
+    local ok, params = pcall(ext.get_effect_params, effect_id)
+    if not ok then
+        ext.warn("get_effect_params failed for " .. tostring(effect_id) .. ": " .. tostring(params))
+        return {}
+    end
+
+    if type(params) ~= "table" then
+        return {}
+    end
+
+    return clone_plain_value(params)
+end
+
+local function build_default_effect_params_from_schema(schema)
+    local defaults = {}
+    if type(schema) ~= "table" then
+        return defaults
+    end
+
+    for _, param in ipairs(schema) do
+        if type(param) == "table" and type(param.key) == "string" then
+            local default_value = param.default
+            if default_value ~= nil and default_value ~= json.null then
+                defaults[param.key] = clone_plain_value(default_value)
+            end
+        end
+    end
+
+    return defaults
+end
+
+local function build_default_effect_params(effect_id)
+    return build_default_effect_params_from_schema(get_effect_params_schema(effect_id))
+end
+
+local function build_effect_catalog()
+    local ok, effects = pcall(ext.get_effects)
+    if not ok then
+        ext.warn("get_effects failed: " .. tostring(effects))
+        return {}
+    end
+
+    if type(effects) ~= "table" then
+        return {}
+    end
+
+    local catalog = {}
+    for _, effect in ipairs(effects) do
+        if type(effect) == "table" and type(effect.id) == "string" and effect.id ~= "" then
+            catalog[#catalog + 1] = {
+                id = effect.id,
+                name = clone_plain_value(effect.name),
+                description = clone_plain_value(effect.description),
+                group = clone_plain_value(effect.group),
+                icon = effect.icon,
+                params = get_effect_params_schema(effect.id),
+            }
+        end
+    end
+
+    return catalog
+end
+
 local function is_valid_layout_id(value)
     return type(value) == "string"
         and #value == LAYOUT_ID_LENGTH
@@ -538,6 +645,7 @@ local function normalize_layout(layout, existing_ids, device_lookup)
         y = tonumber(normalized.canvas and normalized.canvas.y) or 0,
     }
     normalized.placements = normalize_placements(normalized.placements, device_lookup)
+    normalized.virtual_device = normalize_virtual_device_config(normalized.virtual_device)
     normalized.serial = nil
     normalized.serial_id = nil
     return normalized
@@ -593,6 +701,125 @@ end
 --- Derive the unique port name for a layout.
 local function layout_port(layout_id)
     return CANVAS_PORT_PREFIX .. ":" .. layout_id
+end
+
+local function layout_scope(layout)
+    return { port = layout_port(layout.id) }
+end
+
+local function set_layout_virtual_power(layout, power_on)
+    if type(layout.virtual_device) ~= "table" then
+        layout.virtual_device = normalize_virtual_device_config(nil)
+    end
+
+    layout.virtual_device.power_on = power_on ~= false
+    if not layout.registered then
+        return true
+    end
+
+    local ok, err = pcall(ext.set_scope_power, layout_scope(layout), not layout.virtual_device.power_on)
+    if not ok then
+        return false, err
+    end
+
+    return true
+end
+
+local function set_layout_virtual_effect(layout, effect_id)
+    if type(layout.virtual_device) ~= "table" then
+        layout.virtual_device = normalize_virtual_device_config(nil)
+    end
+
+    local next_effect_id = effect_id
+    if type(next_effect_id) ~= "string" or next_effect_id == "" then
+        next_effect_id = nil
+    end
+
+    layout.virtual_device.effect_id = next_effect_id
+    layout.virtual_device.effect_params = next_effect_id and build_default_effect_params(next_effect_id) or {}
+
+    if not layout.registered then
+        return true
+    end
+
+    local params = next(layout.virtual_device.effect_params) and layout.virtual_device.effect_params or nil
+    local ok, err = pcall(ext.set_scope_effect, layout_scope(layout), next_effect_id, params)
+    if not ok then
+        return false, err
+    end
+
+    return true
+end
+
+local function update_layout_virtual_effect_params(layout, params)
+    if type(layout.virtual_device) ~= "table" then
+        layout.virtual_device = normalize_virtual_device_config(nil)
+    end
+
+    if type(layout.virtual_device.effect_id) ~= "string" or layout.virtual_device.effect_id == "" then
+        layout.virtual_device.effect_params = {}
+        return true
+    end
+
+    layout.virtual_device.effect_params = sanitize_virtual_device_params(params)
+    if not layout.registered then
+        return true
+    end
+
+    local ok, err = pcall(ext.update_scope_effect_params, layout_scope(layout), layout.virtual_device.effect_params)
+    if not ok then
+        return false, err
+    end
+
+    return true
+end
+
+local function reset_layout_virtual_effect_params(layout)
+    if type(layout.virtual_device) ~= "table" then
+        layout.virtual_device = normalize_virtual_device_config(nil)
+    end
+
+    local effect_id = layout.virtual_device.effect_id
+    if type(effect_id) ~= "string" or effect_id == "" then
+        layout.virtual_device.effect_id = nil
+        layout.virtual_device.effect_params = {}
+        return true
+    end
+
+    layout.virtual_device.effect_params = build_default_effect_params(effect_id)
+    if not layout.registered then
+        return true
+    end
+
+    local ok, err = pcall(ext.reset_scope_effect_params, layout_scope(layout))
+    if not ok then
+        return false, err
+    end
+
+    return true
+end
+
+local function apply_layout_virtual_state(layout)
+    if type(layout) ~= "table" or not layout.registered then
+        return true
+    end
+
+    local effect_id = layout.virtual_device and layout.virtual_device.effect_id or nil
+    local effect_params = layout.virtual_device and layout.virtual_device.effect_params or {}
+    local power_on = layout.virtual_device and layout.virtual_device.power_on ~= false
+
+    local params = type(effect_params) == "table" and next(effect_params) and effect_params or nil
+    local ok, err = pcall(ext.set_scope_effect, layout_scope(layout), effect_id, params)
+    if not ok then
+        return false, err
+    end
+
+    ok, err = pcall(ext.set_scope_power, layout_scope(layout), not power_on)
+    if not ok then
+        return false, err
+    end
+
+    return true
 end
 
 --- Mirror device nicknames back into registered layout names (device → layout).
@@ -865,6 +1092,10 @@ local function do_register_canvas(layout)
     if ok then
         layout.registered = true
         move_layout_after_registered(layout)
+        local applied, apply_err = apply_layout_virtual_state(layout)
+        if not applied then
+            ext.warn("failed to apply virtual-device state for layout " .. tostring(layout.id) .. ": " .. tostring(apply_err))
+        end
         ext.log(string.format("Canvas registered: %s (%s, %dx%d)", layout.name, port, cw, ch))
     else
         ext.log("error: failed to register canvas for layout " .. layout.id .. ": " .. tostring(err))
@@ -973,7 +1204,19 @@ local function layout_summary(layout, device_lookup)
         canvas      = layout.canvas,
         snap_to_grid = layout.snap_to_grid or false,
         placements  = placements,
+        virtual_device = {
+            power_on = layout.virtual_device and layout.virtual_device.power_on ~= false,
+            effect_id = layout.virtual_device and layout.virtual_device.effect_id or nil,
+            effect_params = clone_plain_value(layout.virtual_device and layout.virtual_device.effect_params or {}),
+        },
     }
+end
+
+local function emit_effect_catalog()
+    ext.page_emit({
+        type = "effects_catalog",
+        effects = build_effect_catalog(),
+    })
 end
 
 --- Emit full state to the page.
@@ -1041,6 +1284,10 @@ function P.on_page_message(msg)
     if msg.type == "get_devices" then
         local devices = ext.get_devices()
         ext.page_emit({ type = "devices", data = filter_devices_for_page(devices) })
+
+    -- ── Effects catalog ──
+    elseif msg.type == "get_effects_catalog" then
+        emit_effect_catalog()
 
     -- ── Full state request ──
     elseif msg.type == "get_full_state" then
@@ -1176,6 +1423,74 @@ function P.on_page_message(msg)
         local layout = find_layout(lid)
         if layout then
             layout.snap_to_grid = msg.snap_to_grid or false
+            save_config()
+            emit_layout_status(layout)
+        end
+
+    -- ── Virtual-device power ──
+    elseif msg.type == "set_layout_virtual_power" then
+        local lid = msg.layout_id or config.active_layout_id
+        local layout = find_layout(lid)
+        if layout then
+            local previous = clone_plain_value(layout.virtual_device)
+            local ok, err = set_layout_virtual_power(layout, msg.power_on)
+            if not ok then
+                layout.virtual_device = previous
+                ext.warn("set_scope_power failed for layout " .. tostring(layout.id) .. ": " .. tostring(err))
+                emit_layout_status(layout)
+                return
+            end
+            save_config()
+            emit_layout_status(layout)
+        end
+
+    -- ── Virtual-device effect ──
+    elseif msg.type == "set_layout_virtual_effect" then
+        local lid = msg.layout_id or config.active_layout_id
+        local layout = find_layout(lid)
+        if layout then
+            local previous = clone_plain_value(layout.virtual_device)
+            local ok, err = set_layout_virtual_effect(layout, msg.effect_id)
+            if not ok then
+                layout.virtual_device = previous
+                ext.warn("set_scope_effect failed for layout " .. tostring(layout.id) .. ": " .. tostring(err))
+                emit_layout_status(layout)
+                return
+            end
+            save_config()
+            emit_layout_status(layout)
+        end
+
+    -- ── Virtual-device effect params ──
+    elseif msg.type == "update_layout_virtual_effect_params" then
+        local lid = msg.layout_id or config.active_layout_id
+        local layout = find_layout(lid)
+        if layout then
+            local previous = clone_plain_value(layout.virtual_device)
+            local ok, err = update_layout_virtual_effect_params(layout, msg.params)
+            if not ok then
+                layout.virtual_device = previous
+                ext.warn("update_scope_effect_params failed for layout " .. tostring(layout.id) .. ": " .. tostring(err))
+                emit_layout_status(layout)
+                return
+            end
+            save_config()
+            emit_layout_status(layout)
+        end
+
+    -- ── Reset virtual-device effect params ──
+    elseif msg.type == "reset_layout_virtual_effect_params" then
+        local lid = msg.layout_id or config.active_layout_id
+        local layout = find_layout(lid)
+        if layout then
+            local previous = clone_plain_value(layout.virtual_device)
+            local ok, err = reset_layout_virtual_effect_params(layout)
+            if not ok then
+                layout.virtual_device = previous
+                ext.warn("reset_scope_effect_params failed for layout " .. tostring(layout.id) .. ": " .. tostring(err))
+                emit_layout_status(layout)
+                return
+            end
             save_config()
             emit_layout_status(layout)
         end
