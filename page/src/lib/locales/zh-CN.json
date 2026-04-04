@@ -15,6 +15,8 @@
   "canvas.unregistered": "画布设备: 未注册",
   "canvas.deactivate": "停用画布",
   "canvas.register": "注册设备",
+  "canvas.help.ariaLabel": "LED画布说明",
+  "canvas.help.description": "LED画布可以让多个设备的灯珠注册为一个虚拟设备，来实现更统一的灯光效果。",
   "snap.on": "网格吸附: 开",
   "snap.off": "网格吸附: 关",
   "device.panel": "设备",
@@ -48,5 +50,10 @@
   "layoutManager.rangeMax": "最大",
   "layoutManager.addColor": "添加颜色",
   "layoutManager.removeColor": "删除颜色",
-  "layoutManager.unsupported": "这个参数类型暂时还不支持。"
+  "layoutManager.unsupported": "这个参数类型暂时还不支持。",
+  "layoutManager.rawJson": "原始输出 JSON",
+  "layoutManager.rawJson.ready": "已获取",
+  "layoutManager.rawJson.unavailable": "未获取",
+  "layoutManager.rawJson.description": "这里显示虚拟画布输出当前从 Core 读到的原始数据，便于排查字段结构。",
+  "layoutManager.rawJson.empty": "当前还没有获取到原始输出 JSON。"
 }

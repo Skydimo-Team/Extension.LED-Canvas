@@ -15,6 +15,8 @@
   "canvas.unregistered": "畫布裝置：未註冊",
   "canvas.deactivate": "停用畫布",
   "canvas.register": "註冊裝置",
+  "canvas.help.ariaLabel": "LED畫布說明",
+  "canvas.help.description": "LED 畫布可以讓多個裝置的燈珠註冊為一個虛擬裝置，實現更一致的燈光效果。",
   "snap.on": "網格吸附：開",
   "snap.off": "網格吸附：關",
   "device.panel": "裝置",
@@ -28,5 +30,10 @@
   "device.noMatch": "無符合項目",
   "device.staleTooltip": "裝置已更新，請移除後重新新增",
   "device.removeFromCanvas": "從畫布移除",
-  "device.addToCanvas": "新增至畫布"
+  "device.addToCanvas": "新增至畫布",
+  "layoutManager.rawJson": "原始輸出 JSON",
+  "layoutManager.rawJson.ready": "已取得",
+  "layoutManager.rawJson.unavailable": "未取得",
+  "layoutManager.rawJson.description": "這裡會顯示目前從 Core 讀到的虛擬畫布輸出原始資料，方便排查欄位結構。",
+  "layoutManager.rawJson.empty": "目前還沒有取得原始輸出 JSON。"
 }

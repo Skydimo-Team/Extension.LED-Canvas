@@ -1,4 +1,4 @@
-import { Fragment, useMemo, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Plus, RotateCcw, X } from 'lucide-react'
 import { ScrollArea } from 'radix-ui'
 import { useCanvasStore } from '@/lib/canvasStore'
@@ -124,6 +124,23 @@ function parseOptionValue(value: string): unknown {
   }
 }
 
+function formatDebugJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function areParamValuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return false
+    return left.every((entry, index) => areParamValuesEqual(entry, right[index]))
+  }
+
+  return Object.is(left, right)
+}
+
 function SettingSwitch({
   checked,
   disabled = false,
@@ -202,6 +219,53 @@ function EffectParamField({
 }) {
   const label = resolveLocalizedText(param.label, locale) || param.key
   const commonClass = 'h-[32px] w-full rounded-[8px] border border-border bg-secondary px-2 text-[12px] text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60'
+  const [draftValue, setDraftValue] = useState<unknown>(() => cloneValue(value))
+  const [isInteracting, setIsInteracting] = useState(false)
+  const draftValueRef = useRef(draftValue)
+  const lastCommittedValueRef = useRef<unknown>(cloneValue(value))
+
+  useEffect(() => {
+    draftValueRef.current = draftValue
+  }, [draftValue])
+
+  useEffect(() => {
+    const nextValue = cloneValue(value)
+    lastCommittedValueRef.current = nextValue
+    if (!isInteracting) {
+      setDraftValue(nextValue)
+    }
+  }, [value, isInteracting])
+
+  const commitDeferredValue = (nextValue?: unknown) => {
+    const resolvedValue = cloneValue(nextValue ?? draftValueRef.current)
+    setIsInteracting(false)
+    setDraftValue(resolvedValue)
+
+    if (areParamValuesEqual(resolvedValue, lastCommittedValueRef.current)) {
+      return
+    }
+
+    lastCommittedValueRef.current = cloneValue(resolvedValue)
+    onChange(resolvedValue)
+  }
+
+  useEffect(() => {
+    if (!isInteracting || (param.type !== 'slider' && param.type !== 'range_slider')) {
+      return
+    }
+
+    const handlePointerRelease = () => {
+      commitDeferredValue()
+    }
+
+    window.addEventListener('pointerup', handlePointerRelease)
+    window.addEventListener('pointercancel', handlePointerRelease)
+
+    return () => {
+      window.removeEventListener('pointerup', handlePointerRelease)
+      window.removeEventListener('pointercancel', handlePointerRelease)
+    }
+  }, [isInteracting, param.type])
 
   let control: React.ReactNode = null
 
@@ -210,7 +274,7 @@ function EffectParamField({
       const min = normalizeNumber(param.min, 0)
       const max = normalizeNumber(param.max, 100)
       const step = normalizeNumber(param.step, 1)
-      const numericValue = Math.min(max, Math.max(min, normalizeNumber(value, min)))
+      const numericValue = Math.min(max, Math.max(min, normalizeNumber(draftValue, min)))
       control = (
         <div className="flex items-center gap-2">
           <input
@@ -221,7 +285,19 @@ function EffectParamField({
             step={step}
             value={numericValue}
             disabled={disabled}
-            onChange={e => onChange(Number(e.target.value))}
+            onPointerDown={() => setIsInteracting(true)}
+            onChange={e => {
+              setIsInteracting(true)
+              setDraftValue(Number(e.target.value))
+            }}
+            onKeyUp={e => {
+              const targetValue = Number((e.target as HTMLInputElement).value)
+              commitDeferredValue(targetValue)
+            }}
+            onBlur={e => {
+              const targetValue = Number(e.target.value)
+              commitDeferredValue(targetValue)
+            }}
           />
           <span className="w-[52px] shrink-0 text-right text-[11px] text-muted-foreground/80 tabular-nums">
             {formatNumber(numericValue, step)}
@@ -235,7 +311,7 @@ function EffectParamField({
       const min = normalizeNumber(param.min, 0)
       const max = normalizeNumber(param.max, 100)
       const step = normalizeNumber(param.step, 1)
-      const [start, end] = normalizeRangeValue(param, value)
+      const [start, end] = normalizeRangeValue(param, draftValue)
 
       control = (
         <div className="grid gap-2">
@@ -249,9 +325,19 @@ function EffectParamField({
               step={step}
               value={start}
               disabled={disabled}
+              onPointerDown={() => setIsInteracting(true)}
               onChange={e => {
+                setIsInteracting(true)
                 const nextStart = Math.min(Number(e.target.value), end)
-                onChange([nextStart, end])
+                setDraftValue([nextStart, end])
+              }}
+              onKeyUp={e => {
+                const nextStart = Math.min(Number((e.target as HTMLInputElement).value), end)
+                commitDeferredValue([nextStart, end])
+              }}
+              onBlur={e => {
+                const nextStart = Math.min(Number(e.target.value), end)
+                commitDeferredValue([nextStart, end])
               }}
             />
             <span className="w-[52px] text-right text-[11px] text-muted-foreground/80 tabular-nums">
@@ -268,9 +354,19 @@ function EffectParamField({
               step={step}
               value={end}
               disabled={disabled}
+              onPointerDown={() => setIsInteracting(true)}
               onChange={e => {
+                setIsInteracting(true)
                 const nextEnd = Math.max(Number(e.target.value), start)
-                onChange([start, nextEnd])
+                setDraftValue([start, nextEnd])
+              }}
+              onKeyUp={e => {
+                const nextEnd = Math.max(Number((e.target as HTMLInputElement).value), start)
+                commitDeferredValue([start, nextEnd])
+              }}
+              onBlur={e => {
+                const nextEnd = Math.max(Number(e.target.value), start)
+                commitDeferredValue([start, nextEnd])
               }}
             />
             <span className="w-[52px] text-right text-[11px] text-muted-foreground/80 tabular-nums">
@@ -482,6 +578,12 @@ export function LayoutManager() {
     ? t('layoutManager.status.registered')
     : t('layoutManager.status.unregistered')
   const isRegistered = activeLayout?.registered === true
+  const rawOutputPayload = activeLayout?.virtual_device.raw_output ?? null
+  const rawOutputAvailable = rawOutputPayload != null
+  const rawOutputJson = useMemo(
+    () => rawOutputAvailable ? formatDebugJson(rawOutputPayload) : '',
+    [rawOutputAvailable, rawOutputPayload],
+  )
 
   return (
     <div className="flex flex-col h-full">
@@ -621,6 +723,32 @@ export function LayoutManager() {
                     </Fragment>
                   ))
                 )}
+              </div>
+
+              <div className="mx-1 mt-2 rounded-[6px] overflow-hidden border border-foreground/[0.04] bg-foreground/[0.02]">
+                <details>
+                  <summary className="cursor-pointer px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 select-none">
+                    {t('layoutManager.rawJson')}
+                    <span className="ml-2 rounded-[999px] border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-normal normal-case tracking-normal text-muted-foreground/65">
+                      / canvas
+                    </span>
+                    <span className="ml-2 text-[10px] font-normal tracking-normal text-muted-foreground/55">
+                      {rawOutputAvailable
+                        ? t('layoutManager.rawJson.ready')
+                        : t('layoutManager.rawJson.unavailable')}
+                    </span>
+                  </summary>
+                  <div className="border-t border-foreground/[0.05] px-3 py-3">
+                    <div className="mb-2 text-[11px] text-muted-foreground/65">
+                      {t('layoutManager.rawJson.description')}
+                    </div>
+                    <pre className="max-h-[260px] overflow-auto rounded-[8px] border border-border bg-secondary px-3 py-2 text-[11px] leading-[1.45] text-foreground/80 whitespace-pre-wrap break-all">
+                      {rawOutputAvailable
+                        ? rawOutputJson
+                        : t('layoutManager.rawJson.empty')}
+                    </pre>
+                  </div>
+                </details>
               </div>
             </div>
           )}

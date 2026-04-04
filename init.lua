@@ -107,6 +107,44 @@ local function sanitize_virtual_device_params(value)
     return clone_plain_value(value)
 end
 
+local function plain_values_equal(left, right, seen)
+    if left == right then
+        return true
+    end
+
+    if type(left) ~= type(right) then
+        return false
+    end
+
+    if type(left) ~= "table" then
+        return false
+    end
+
+    if left == json.null or right == json.null then
+        return left == right
+    end
+
+    seen = seen or {}
+    if seen[left] == right then
+        return true
+    end
+    seen[left] = right
+
+    for key, left_value in pairs(left) do
+        if not plain_values_equal(left_value, right[key], seen) then
+            return false
+        end
+    end
+
+    for key in pairs(right) do
+        if left[key] == nil then
+            return false
+        end
+    end
+
+    return true
+end
+
 local function normalize_virtual_device_config(value)
     local raw = type(value) == "table" and value or {}
     local effect_id = raw.effect_id
@@ -704,7 +742,10 @@ local function layout_port(layout_id)
 end
 
 local function layout_scope(layout)
-    return { port = layout_port(layout.id) }
+    return {
+        port = layout_port(layout.id),
+        output_id = CANVAS_OUTPUT_ID,
+    }
 end
 
 local function set_layout_virtual_power(layout, power_on)
@@ -822,6 +863,231 @@ local function apply_layout_virtual_state(layout)
     return true
 end
 
+local function find_output_by_id(device, output_id)
+    if type(device) ~= "table" or type(device.outputs) ~= "table" then
+        return nil
+    end
+
+    local normalized_output_id = type(output_id) == "string" and output_id:lower() or nil
+    local first_output = nil
+
+    for _, output in ipairs(device.outputs) do
+        if type(output) == "table" then
+            first_output = first_output or output
+            if output.id == output_id then
+                return output
+            end
+            if normalized_output_id and type(output.id) == "string" and output.id:lower() == normalized_output_id then
+                return output
+            end
+        end
+    end
+
+    if #device.outputs == 1 then
+        return first_output
+    end
+
+    return nil
+end
+
+local function resolve_live_effect_id(mode_state)
+    if type(mode_state) ~= "table" then
+        return nil
+    end
+
+    for _, key in ipairs({ "effective_effect_id", "selected_effect_id", "effect_id" }) do
+        local effect_id = mode_state[key]
+        if type(effect_id) == "string" and effect_id ~= "" then
+            return effect_id
+        end
+    end
+
+    return nil
+end
+
+local function has_live_effect_state(mode_state)
+    if type(mode_state) ~= "table" then
+        return false
+    end
+
+    return resolve_live_effect_id(mode_state) ~= nil
+        or mode_state.effective_params ~= nil
+        or mode_state.selected_params ~= nil
+        or mode_state.params ~= nil
+end
+
+local function resolve_live_effect_params(mode_state, effect_id, fallback)
+    if type(effect_id) ~= "string" or effect_id == "" then
+        return {}
+    end
+
+    if type(mode_state) == "table" then
+        local params = mode_state.effective_params
+        if params == nil then
+            params = mode_state.selected_params
+        end
+        if params == nil then
+            params = mode_state.params
+        end
+
+        if type(params) == "table" or params == json.null then
+            return sanitize_virtual_device_params(params)
+        end
+    end
+
+    if type(fallback) == "table" and fallback.effect_id == effect_id then
+        return sanitize_virtual_device_params(fallback.effect_params)
+    end
+
+    return {}
+end
+
+local function resolve_live_power_on(power_state, fallback)
+    if type(power_state) ~= "table" then
+        return fallback ~= false
+    end
+
+    if power_state.effective_is_off ~= nil then
+        return power_state.effective_is_off ~= true
+    end
+
+    if power_state.selected_is_off ~= nil then
+        return power_state.selected_is_off ~= true
+    end
+
+    if power_state.is_off ~= nil then
+        return power_state.is_off ~= true
+    end
+
+    return fallback ~= false
+end
+
+local function has_live_power_state(power_state)
+    return type(power_state) == "table"
+        and (
+            power_state.effective_is_off ~= nil
+            or power_state.selected_is_off ~= nil
+            or power_state.is_off ~= nil
+        )
+end
+
+local function device_has_live_effect_state(device)
+    if type(device) ~= "table" then
+        return false
+    end
+
+    if has_live_effect_state(device.mode) then
+        return true
+    end
+
+    if type(device.outputs) ~= "table" then
+        return false
+    end
+
+    for _, output in ipairs(device.outputs) do
+        if type(output) == "table" and has_live_effect_state(output.mode) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function device_has_live_canvas_output_state(device)
+    local output = find_output_by_id(device, CANVAS_OUTPUT_ID)
+    if type(output) ~= "table" then
+        return false
+    end
+
+    return has_live_effect_state(output.mode) or has_live_power_state(output.power)
+end
+
+local function resolve_live_canvas_device(devices, port)
+    if type(port) ~= "string" or port == "" then
+        return nil
+    end
+
+    local candidate = nil
+    if type(devices) == "table" then
+        for _, device in ipairs(devices) do
+            if type(device) == "table" and device.port == port then
+                candidate = device
+                break
+            end
+        end
+    end
+
+    if candidate and device_has_live_canvas_output_state(candidate) then
+        return candidate
+    end
+
+    local ok, detailed = pcall(ext.get_device_info, port)
+    if ok and type(detailed) == "table" then
+        return detailed
+    end
+
+    if candidate and device_has_live_effect_state(candidate) then
+        return candidate
+    end
+
+    return candidate
+end
+
+local function resolve_live_canvas_output(devices, port)
+    local device = resolve_live_canvas_device(devices, port)
+    if type(device) ~= "table" then
+        return nil, nil
+    end
+
+    return find_output_by_id(device, CANVAS_OUTPUT_ID), device
+end
+
+local function sync_canvas_virtual_device_states(devices)
+    if type(devices) ~= "table" then
+        return false
+    end
+
+    local changed = false
+
+    for _, layout in ipairs(config and config.layouts or {}) do
+        if layout.registered then
+            local current = normalize_virtual_device_config(layout.virtual_device)
+            local port = layout_port(layout.id)
+            local live_output, live_device = resolve_live_canvas_output(devices, port)
+
+            local next_state = current
+            if live_output or live_device then
+                local mode_state = type(live_output) == "table" and type(live_output.mode) == "table" and live_output.mode or nil
+                if not has_live_effect_state(mode_state) and type(live_device) == "table" then
+                    mode_state = type(live_device.mode) == "table" and live_device.mode or nil
+                end
+
+                local power_state = type(live_output) == "table" and type(live_output.power) == "table" and live_output.power or nil
+                if not has_live_power_state(power_state) and type(live_device) == "table" then
+                    power_state = type(live_device.power) == "table" and live_device.power or nil
+                end
+
+                local effect_id = resolve_live_effect_id(mode_state)
+
+                next_state = {
+                    power_on = resolve_live_power_on(power_state, current.power_on),
+                    effect_id = effect_id,
+                    effect_params = resolve_live_effect_params(mode_state, effect_id, current),
+                }
+            end
+
+            if not plain_values_equal(current, next_state) then
+                layout.virtual_device = next_state
+                changed = true
+            else
+                layout.virtual_device = current
+            end
+        end
+    end
+
+    return changed
+end
+
 --- Mirror device nicknames back into registered layout names (device → layout).
 local function sync_canvas_nicknames(devices)
     if type(devices) ~= "table" then return false end
@@ -842,6 +1108,21 @@ local function sync_canvas_nicknames(devices)
         end
     end
     return changed
+end
+
+local function sync_live_canvas_layout_state(devices)
+    local current_devices = devices
+    if type(current_devices) ~= "table" then
+        local ok, queried_devices = pcall(ext.get_devices)
+        if not ok or type(queried_devices) ~= "table" then
+            return nil, false
+        end
+        current_devices = queried_devices
+    end
+
+    local names_changed = sync_canvas_nicknames(current_devices)
+    local virtual_state_changed = sync_canvas_virtual_device_states(current_devices)
+    return get_device_lookup(current_devices), names_changed or virtual_state_changed
 end
 
 --- Find a layout by id.  Returns the layout table and its index, or nil.
@@ -1166,6 +1447,13 @@ local function layout_summary(layout, device_lookup)
     local lookup = device_lookup or get_device_lookup()
     local placements = {}
     local status = placement_led_status[layout.id] or {}
+    local raw_virtual_device = nil
+    local raw_virtual_output = nil
+
+    if layout.registered then
+        raw_virtual_output, raw_virtual_device = resolve_live_canvas_output(nil, layout_port(layout.id))
+    end
+
     for _, placement in ipairs(layout.placements or {}) do
         local placement_status = status[placement.id] or {}
         local runtime = runtime_placement(placement, lookup)
@@ -1208,6 +1496,8 @@ local function layout_summary(layout, device_lookup)
             power_on = layout.virtual_device and layout.virtual_device.power_on ~= false,
             effect_id = layout.virtual_device and layout.virtual_device.effect_id or nil,
             effect_params = clone_plain_value(layout.virtual_device and layout.virtual_device.effect_params or {}),
+            raw_device = clone_plain_value(raw_virtual_device),
+            raw_output = clone_plain_value(raw_virtual_output),
         },
     }
 end
@@ -1262,7 +1552,8 @@ function P.on_start()
         do_register_canvas(layout)
     end
 
-    rebuild_all_routing()
+    local startup_lookup = sync_live_canvas_layout_state()
+    rebuild_all_routing(startup_lookup)
     save_config()
 end
 
@@ -1271,6 +1562,7 @@ function P.on_devices_changed(devices)
     local normalized = normalize_config(config, lookup)
     config = normalized
     sync_canvas_nicknames(devices)
+    sync_canvas_virtual_device_states(devices)
     rebuild_all_routing(lookup)
     save_config()
     ext.page_emit({ type = "devices", data = filter_devices_for_page(devices) })
@@ -1291,7 +1583,11 @@ function P.on_page_message(msg)
 
     -- ── Full state request ──
     elseif msg.type == "get_full_state" then
-        emit_full_state()
+        local lookup, changed = sync_live_canvas_layout_state()
+        if changed then
+            save_config()
+        end
+        emit_full_state(lookup)
 
     -- ── Switch active layout ──
     elseif msg.type == "switch_layout" then
@@ -1497,7 +1793,11 @@ function P.on_page_message(msg)
 
     -- ── Legacy: get_canvas_status → emit full state ──
     elseif msg.type == "get_canvas_status" then
-        emit_full_state()
+        local lookup, changed = sync_live_canvas_layout_state()
+        if changed then
+            save_config()
+        end
+        emit_full_state(lookup)
     end
 end
 

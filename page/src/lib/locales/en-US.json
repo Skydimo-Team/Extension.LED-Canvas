@@ -15,6 +15,8 @@
   "canvas.unregistered": "Canvas device: not registered",
   "canvas.deactivate": "Deactivate canvas",
   "canvas.register": "Register device",
+  "canvas.help.ariaLabel": "LED canvas help",
+  "canvas.help.description": "LED canvas lets multiple devices register their LEDs as one virtual device, so lighting effects can stay more consistent.",
   "snap.on": "Grid snap: on",
   "snap.off": "Grid snap: off",
   "device.panel": "Devices",
@@ -48,5 +50,10 @@
   "layoutManager.rangeMax": "Max",
   "layoutManager.addColor": "Add color",
   "layoutManager.removeColor": "Remove color",
-  "layoutManager.unsupported": "This parameter type is not supported yet."
+  "layoutManager.unsupported": "This parameter type is not supported yet.",
+  "layoutManager.rawJson": "Raw Output JSON",
+  "layoutManager.rawJson.ready": "Available",
+  "layoutManager.rawJson.unavailable": "Unavailable",
+  "layoutManager.rawJson.description": "Shows the current raw payload returned by Core for the virtual canvas output.",
+  "layoutManager.rawJson.empty": "No raw output JSON is available yet."
 }

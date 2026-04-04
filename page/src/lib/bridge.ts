@@ -71,6 +71,8 @@ export interface LayoutVirtualDeviceState {
   power_on: boolean
   effect_id: string | null
   effect_params: Record<string, unknown>
+  raw_device: unknown | null
+  raw_output: unknown | null
 }
 
 export interface LayoutInfo {
@@ -178,6 +180,8 @@ function normalizeVirtualDeviceState(value: unknown): LayoutVirtualDeviceState {
     power_on: raw.power_on !== false,
     effect_id: effectId,
     effect_params: effectId ? effectParams : {},
+    raw_device: raw.raw_device ?? null,
+    raw_output: raw.raw_output ?? null,
   }
 }
 
