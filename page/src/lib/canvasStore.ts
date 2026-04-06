@@ -72,6 +72,7 @@ interface CanvasState {
   removeDevice: (id: string) => void
   updateDevice: (id: string, patch: Partial<Pick<PlacedDevice, 'x' | 'y' | 'width' | 'height' | 'rotation'>>) => void
   setDeviceBrightness: (id: string, brightness: number) => void
+  mirrorDeviceHorizontally: (id: string) => void
   updateCanvasBounds: (patch: Partial<CanvasBounds>) => void
   setSnapToGrid: (snap: boolean) => void
   toggleSnapToGrid: () => void
@@ -103,6 +104,44 @@ function computeDefaultSize(ledsCount: number, matrix: Matrix | null): { width: 
   }
   if (ledsCount <= 0) return { width: 1, height: 1 }
   return { width: ledsCount, height: 1 }
+}
+
+function buildSequentialMatrix(ledsCount: number): Matrix | null {
+  const count = Math.max(0, Math.floor(ledsCount))
+  if (count <= 0) return null
+
+  return {
+    width: count,
+    height: 1,
+    map: Array.from({ length: count }, (_, index) => index),
+  }
+}
+
+function mirrorMatrixHorizontally(matrix: Matrix | null, ledsCount: number): Matrix | null {
+  const source = matrix ?? buildSequentialMatrix(ledsCount)
+  if (!source || source.width <= 0 || source.height <= 0) {
+    return source
+  }
+
+  const cellCount = source.width * source.height
+  const sourceMap = Array.isArray(source.map) ? source.map : []
+  const mirroredMap = new Array<number>(cellCount)
+
+  for (let row = 0; row < source.height; row += 1) {
+    for (let col = 0; col < source.width; col += 1) {
+      const sourceIndex = row * source.width + (source.width - 1 - col)
+      const targetIndex = row * source.width + col
+      mirroredMap[targetIndex] = typeof sourceMap[sourceIndex] === 'number'
+        ? sourceMap[sourceIndex]
+        : -1
+    }
+  }
+
+  return {
+    width: source.width,
+    height: source.height,
+    map: mirroredMap,
+  }
 }
 
 function makeKey(deviceId: string, outputId: string, segmentId?: string) {
@@ -249,6 +288,18 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
     const clamped = Math.max(0, Math.min(100, Math.round(brightness)))
     set(s => ({
       placedDevices: s.placedDevices.map(d => (d.id === id ? { ...d, brightness: clamped } : d)),
+    }))
+  },
+
+  mirrorDeviceHorizontally(id) {
+    set(s => ({
+      placedDevices: s.placedDevices.map((d) => {
+        if (d.id !== id) return d
+        return {
+          ...d,
+          matrix: mirrorMatrixHorizontally(d.matrix, d.ledsCount),
+        }
+      }),
     }))
   },
 
