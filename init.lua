@@ -29,6 +29,10 @@ local core_locked_outputs = {}  -- output_key → { port, outputId, indices_set 
 local placement_led_status = {} -- layout_id → { placement_id → { blockedLedIndices, blockedLedCount, availableLedCount } }
 local random_seeded       = false
 
+-- Forward declarations for functions referenced before definition
+local save_config
+local emit_layout_status
+
 -- ── Helpers ───────────────────────────────────────────────────────────
 
 local function ensure_random_seed()
@@ -80,6 +84,66 @@ local function sanitize_brightness(value)
     local n = tonumber(value)
     if not n or n ~= n then return 100 end
     return math.floor(math.max(0, math.min(100, n)) + 0.5)
+end
+
+local function clone_value(value)
+    if type(value) ~= "table" or value == json.null then
+        return value
+    end
+    local copy = {}
+    for k, v in pairs(value) do
+        copy[k] = clone_value(v)
+    end
+    return copy
+end
+
+local function normalize_virtual_device_config(value)
+    local raw = type(value) == "table" and value or {}
+    local effect_id = raw.effect_id
+    if type(effect_id) ~= "string" or effect_id == "" then
+        effect_id = nil
+    end
+    return {
+        power_on = raw.power_on ~= false,
+        paused = raw.paused == true,
+        effect_id = effect_id,
+        effect_params = effect_id and (type(raw.effect_params) == "table" and clone_value(raw.effect_params) or {}) or {},
+    }
+end
+
+local function get_effect_params_schema(effect_id)
+    local params = ext.get_effect_params(effect_id)
+    return type(params) == "table" and params or {}
+end
+
+local function build_default_effect_params(effect_id)
+    if not effect_id then return {} end
+    local defaults = {}
+    for _, param in ipairs(get_effect_params_schema(effect_id)) do
+        if type(param) == "table" and type(param.key) == "string"
+            and param.default ~= nil and param.default ~= json.null then
+            defaults[param.key] = clone_value(param.default)
+        end
+    end
+    return defaults
+end
+
+local function build_effect_catalog()
+    local effects = ext.get_effects()
+    local catalog = {}
+    for _, effect in ipairs(effects) do
+        if type(effect.id) == "string" and effect.id ~= "" then
+            catalog[#catalog + 1] = {
+                id = effect.id,
+                name = effect.name,
+                description = effect.description,
+                group = effect.group,
+                icon = effect.icon,
+                params = get_effect_params_schema(effect.id),
+            }
+        end
+    end
+    return catalog
 end
 
 local function is_valid_layout_id(value)
@@ -538,6 +602,7 @@ local function normalize_layout(layout, existing_ids, device_lookup)
         y = tonumber(normalized.canvas and normalized.canvas.y) or 0,
     }
     normalized.placements = normalize_placements(normalized.placements, device_lookup)
+    normalized.virtual_device = normalize_virtual_device_config(normalized.virtual_device)
     normalized.serial = nil
     normalized.serial_id = nil
     return normalized
@@ -595,6 +660,160 @@ local function layout_port(layout_id)
     return CANVAS_PORT_PREFIX .. ":" .. layout_id
 end
 
+local function layout_scope(layout)
+    return {
+        port = layout_port(layout.id),
+        output_id = CANVAS_OUTPUT_ID,
+    }
+end
+
+local function set_layout_virtual_power(layout, power_on)
+    layout.virtual_device.power_on = power_on ~= false
+    if not layout.registered then return true end
+    local ok, err = pcall(ext.set_scope_power, layout_scope(layout), not layout.virtual_device.power_on)
+    if not ok then return false, err end
+    return true
+end
+
+local function set_layout_virtual_paused(layout, paused)
+    layout.virtual_device.paused = paused == true
+    if not layout.registered then return true end
+    local ok, err = pcall(ext.set_scope_mode_paused, layout_scope(layout), layout.virtual_device.paused)
+    if not ok then return false, err end
+    return true
+end
+
+local function set_layout_virtual_effect(layout, effect_id)
+    local next_id = (type(effect_id) == "string" and effect_id ~= "") and effect_id or nil
+    layout.virtual_device.effect_id = next_id
+    layout.virtual_device.effect_params = next_id and build_default_effect_params(next_id) or {}
+    if not layout.registered then return true end
+    local params = next(layout.virtual_device.effect_params) and layout.virtual_device.effect_params or nil
+    local ok, err = pcall(ext.set_scope_effect, layout_scope(layout), next_id, params)
+    if not ok then return false, err end
+    return true
+end
+
+local function update_layout_virtual_effect_params(layout, params)
+    if not layout.virtual_device.effect_id then
+        layout.virtual_device.effect_params = {}
+        return true
+    end
+    layout.virtual_device.effect_params = type(params) == "table" and clone_value(params) or {}
+    if not layout.registered then return true end
+    local ok, err = pcall(ext.update_scope_effect_params, layout_scope(layout), layout.virtual_device.effect_params)
+    if not ok then return false, err end
+    return true
+end
+
+local function reset_layout_virtual_effect_params(layout)
+    if not layout.virtual_device.effect_id then
+        layout.virtual_device.effect_params = {}
+        return true
+    end
+    layout.virtual_device.effect_params = build_default_effect_params(layout.virtual_device.effect_id)
+    if not layout.registered then return true end
+    local ok, err = pcall(ext.reset_scope_effect_params, layout_scope(layout))
+    if not ok then return false, err end
+    return true
+end
+
+local function apply_layout_virtual_state(layout)
+    if not layout.registered then return true end
+    local vd = layout.virtual_device
+    local scope = layout_scope(layout)
+    local params = next(vd.effect_params) and vd.effect_params or nil
+    local ok, err = pcall(ext.set_scope_effect, scope, vd.effect_id, params)
+    if not ok then return false, err end
+    ok, err = pcall(ext.set_scope_power, scope, not vd.power_on)
+    if not ok then return false, err end
+    if vd.paused then
+        ok, err = pcall(ext.set_scope_mode_paused, scope, true)
+        if not ok then return false, err end
+    end
+    return true
+end
+
+--- Execute a virtual-device mutation with automatic rollback on failure.
+local function with_virtual_device_rollback(layout, action)
+    local previous = clone_value(layout.virtual_device)
+    local ok, err = action()
+    if not ok then
+        layout.virtual_device = previous
+        ext.warn("virtual-device op failed for layout " .. tostring(layout.id) .. ": " .. tostring(err))
+        emit_layout_status(layout)
+        return
+    end
+    save_config()
+    emit_layout_status(layout)
+end
+
+--- Find the "canvas" output on a device by exact id match.
+local function find_canvas_output(device)
+    if type(device) ~= "table" or type(device.outputs) ~= "table" then
+        return nil
+    end
+    for _, output in ipairs(device.outputs) do
+        if type(output) == "table" and output.id == CANVAS_OUTPUT_ID then
+            return output
+        end
+    end
+    return nil
+end
+
+--- Read the live state from Core for a canvas virtual device.
+--- Core's ScopeModeState has: effective_effect_id, effective_params
+--- Core's ScopePowerState has: effective_is_off
+local function read_live_virtual_state(layout)
+    if not layout.registered then return nil end
+    local port = layout_port(layout.id)
+    local ok, device = pcall(ext.get_device_info, port)
+    if not ok or type(device) ~= "table" then return nil end
+
+    local output = find_canvas_output(device)
+    local mode = output and output.mode or device.mode
+    local power = output and output.power or device.power
+
+    local effect_id = type(mode) == "table" and mode.effective_effect_id or nil
+    if type(effect_id) ~= "string" or effect_id == "" then effect_id = nil end
+
+    local effect_params = {}
+    if effect_id and type(mode) == "table" and type(mode.effective_params) == "table" then
+        effect_params = clone_value(mode.effective_params)
+    end
+
+    local power_on = true
+    if type(power) == "table" then
+        power_on = not power.effective_is_off
+    end
+
+    local paused = type(mode) == "table" and mode.effective_is_paused == true
+
+    return {
+        power_on = power_on,
+        paused = paused,
+        effect_id = effect_id,
+        effect_params = effect_params,
+    }
+end
+
+local function sync_canvas_virtual_device_states()
+    local changed = false
+    for _, layout in ipairs(config and config.layouts or {}) do
+        if layout.registered then
+            local live = read_live_virtual_state(layout)
+            if live then
+                local current = layout.virtual_device
+                if json.encode(current) ~= json.encode(live) then
+                    layout.virtual_device = live
+                    changed = true
+                end
+            end
+        end
+    end
+    return changed
+end
+
 --- Mirror device nicknames back into registered layout names (device → layout).
 local function sync_canvas_nicknames(devices)
     if type(devices) ~= "table" then return false end
@@ -617,6 +836,21 @@ local function sync_canvas_nicknames(devices)
     return changed
 end
 
+local function sync_live_canvas_layout_state(devices)
+    local current_devices = devices
+    if type(current_devices) ~= "table" then
+        local ok, queried_devices = pcall(ext.get_devices)
+        if not ok or type(queried_devices) ~= "table" then
+            return nil, false
+        end
+        current_devices = queried_devices
+    end
+
+    local names_changed = sync_canvas_nicknames(current_devices)
+    local virtual_state_changed = sync_canvas_virtual_device_states()
+    return get_device_lookup(current_devices), names_changed or virtual_state_changed
+end
+
 --- Find a layout by id.  Returns the layout table and its index, or nil.
 local function find_layout(layout_id)
     for i, layout in ipairs(config.layouts) do
@@ -628,7 +862,7 @@ local function find_layout(layout_id)
 end
 
 --- Save config to disk (fire-and-forget).
-local function save_config()
+save_config = function()
     config = normalize_config(config, get_device_lookup())
     persist.save(config)
 end
@@ -865,6 +1099,10 @@ local function do_register_canvas(layout)
     if ok then
         layout.registered = true
         move_layout_after_registered(layout)
+        local applied, apply_err = apply_layout_virtual_state(layout)
+        if not applied then
+            ext.warn("failed to apply virtual-device state for layout " .. tostring(layout.id) .. ": " .. tostring(apply_err))
+        end
         ext.log(string.format("Canvas registered: %s (%s, %dx%d)", layout.name, port, cw, ch))
     else
         ext.log("error: failed to register canvas for layout " .. layout.id .. ": " .. tostring(err))
@@ -935,6 +1173,7 @@ local function layout_summary(layout, device_lookup)
     local lookup = device_lookup or get_device_lookup()
     local placements = {}
     local status = placement_led_status[layout.id] or {}
+
     for _, placement in ipairs(layout.placements or {}) do
         local placement_status = status[placement.id] or {}
         local runtime = runtime_placement(placement, lookup)
@@ -973,7 +1212,20 @@ local function layout_summary(layout, device_lookup)
         canvas      = layout.canvas,
         snap_to_grid = layout.snap_to_grid or false,
         placements  = placements,
+        virtual_device = {
+            power_on = layout.virtual_device.power_on,
+            paused = layout.virtual_device.paused,
+            effect_id = layout.virtual_device.effect_id,
+            effect_params = clone_value(layout.virtual_device.effect_params),
+        },
     }
+end
+
+local function emit_effect_catalog()
+    ext.page_emit({
+        type = "effects_catalog",
+        effects = build_effect_catalog(),
+    })
 end
 
 --- Emit full state to the page.
@@ -991,7 +1243,7 @@ local function emit_full_state(device_lookup)
 end
 
 --- Emit status for a single layout.
-local function emit_layout_status(layout, device_lookup)
+emit_layout_status = function(layout, device_lookup)
     ext.page_emit({
         type   = "layout_status",
         layout = layout_summary(layout, device_lookup),
@@ -1019,7 +1271,8 @@ function P.on_start()
         do_register_canvas(layout)
     end
 
-    rebuild_all_routing()
+    local startup_lookup = sync_live_canvas_layout_state()
+    rebuild_all_routing(startup_lookup)
     save_config()
 end
 
@@ -1028,6 +1281,7 @@ function P.on_devices_changed(devices)
     local normalized = normalize_config(config, lookup)
     config = normalized
     sync_canvas_nicknames(devices)
+    sync_canvas_virtual_device_states()
     rebuild_all_routing(lookup)
     save_config()
     ext.page_emit({ type = "devices", data = filter_devices_for_page(devices) })
@@ -1042,9 +1296,17 @@ function P.on_page_message(msg)
         local devices = ext.get_devices()
         ext.page_emit({ type = "devices", data = filter_devices_for_page(devices) })
 
+    -- ── Effects catalog ──
+    elseif msg.type == "get_effects_catalog" then
+        emit_effect_catalog()
+
     -- ── Full state request ──
     elseif msg.type == "get_full_state" then
-        emit_full_state()
+        local lookup, changed = sync_live_canvas_layout_state()
+        if changed then
+            save_config()
+        end
+        emit_full_state(lookup)
 
     -- ── Switch active layout ──
     elseif msg.type == "switch_layout" then
@@ -1180,9 +1442,48 @@ function P.on_page_message(msg)
             emit_layout_status(layout)
         end
 
+    -- ── Virtual-device power ──
+    elseif msg.type == "set_layout_virtual_power" then
+        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        if layout then
+            with_virtual_device_rollback(layout, function() return set_layout_virtual_power(layout, msg.power_on) end)
+        end
+
+    -- ── Virtual-device mode pause ──
+    elseif msg.type == "set_layout_virtual_paused" then
+        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        if layout then
+            with_virtual_device_rollback(layout, function() return set_layout_virtual_paused(layout, msg.paused) end)
+        end
+
+    -- ── Virtual-device effect ──
+    elseif msg.type == "set_layout_virtual_effect" then
+        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        if layout then
+            with_virtual_device_rollback(layout, function() return set_layout_virtual_effect(layout, msg.effect_id) end)
+        end
+
+    -- ── Virtual-device effect params ──
+    elseif msg.type == "update_layout_virtual_effect_params" then
+        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        if layout then
+            with_virtual_device_rollback(layout, function() return update_layout_virtual_effect_params(layout, msg.params) end)
+        end
+
+    -- ── Reset virtual-device effect params ──
+    elseif msg.type == "reset_layout_virtual_effect_params" then
+        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        if layout then
+            with_virtual_device_rollback(layout, function() return reset_layout_virtual_effect_params(layout) end)
+        end
+
     -- ── Legacy: get_canvas_status → emit full state ──
     elseif msg.type == "get_canvas_status" then
-        emit_full_state()
+        local lookup, changed = sync_live_canvas_layout_state()
+        if changed then
+            save_config()
+        end
+        emit_full_state(lookup)
     end
 end
 

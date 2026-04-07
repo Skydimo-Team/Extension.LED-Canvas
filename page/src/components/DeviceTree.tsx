@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import {
+  ArrowLeftRight,
   ChevronRight,
   RefreshCw,
   Plus,
@@ -89,6 +90,30 @@ function BrightnessSlider({ placement }: { placement: PlacedDevice }) {
   )
 }
 
+function MirrorButton({ placement }: { placement: PlacedDevice }) {
+  const mirrorDeviceHorizontally = useCanvasStore(s => s.mirrorDeviceHorizontally)
+
+  const handleClick = useCallback(() => {
+    beginCanvasHistoryBatch()
+    mirrorDeviceHorizontally(placement.id)
+    endCanvasHistoryBatch()
+  }, [mirrorDeviceHorizontally, placement.id])
+
+  return (
+    <div className="flex items-center justify-end pt-1 pb-1.5">
+      <button
+        type="button"
+        className="inline-flex h-6 items-center gap-1.5 rounded-[6px] border border-foreground/[0.06] bg-foreground/[0.03] px-2.5 text-[10px] font-medium text-foreground/70 transition-colors hover:bg-foreground/[0.06] hover:text-foreground/85 cursor-pointer"
+        onClick={handleClick}
+        title={t('device.mirrorHorizontal')}
+      >
+        <ArrowLeftRight className="size-3" />
+        <span>{t('device.mirror')}</span>
+      </button>
+    </div>
+  )
+}
+
 /* ── Leaf item: name + brightness as one visual unit ── */
 function LeafItem({
   name,
@@ -174,6 +199,9 @@ function LeafItem({
           {renderPlacement && (
             <div style={{ paddingLeft: indentPx, paddingRight: 8 }}>
               <BrightnessSlider placement={renderPlacement} />
+              {selected && (
+                <MirrorButton placement={renderPlacement} />
+              )}
             </div>
           )}
         </div>
