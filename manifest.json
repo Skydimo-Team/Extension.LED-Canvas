@@ -9,6 +9,6 @@
   "page": "page/dist/index.html",
   "permissions": [],
   "description": "meta.description",
-  "repository": "https://github.com/skydimo/skydimo-plugins",
+  "repository": "https://github.com/Skydimo-Team/Extension.LED-Canvas.git",
   "license": "MIT"
 }
