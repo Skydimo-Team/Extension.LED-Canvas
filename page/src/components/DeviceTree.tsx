@@ -142,7 +142,7 @@ function LeafItem({
   return (
     <div
       className={cn(
-        'group relative mx-1 rounded-[6px] transition-colors',
+        'group relative mx-1 rounded-[6px] transition-colors duration-200',
         placed
           ? selected
             ? 'bg-primary/[0.08]'
@@ -161,7 +161,7 @@ function LeafItem({
       {/* name row */}
       <div
         className={cn(
-          'flex items-center h-[28px] pr-2 text-[12px]',
+          'flex items-center h-[28px] pr-2 text-[12px] transition-colors duration-200',
           placed ? 'cursor-pointer' : 'cursor-default',
           selected ? 'text-primary' : placed ? 'text-foreground/80' : 'text-muted-foreground',
         )}
@@ -199,9 +199,15 @@ function LeafItem({
           {renderPlacement && (
             <div style={{ paddingLeft: indentPx, paddingRight: 8 }}>
               <BrightnessSlider placement={renderPlacement} />
-              {selected && (
-                <MirrorButton placement={renderPlacement} />
-              )}
+              {/* mirror button — animated height via grid-template-rows */}
+              <div
+                className="grid transition-[grid-template-rows,opacity] duration-200 ease-out"
+                style={{ gridTemplateRows: selected ? '1fr' : '0fr', opacity: selected ? 1 : 0 }}
+              >
+                <div className="overflow-hidden min-h-0">
+                  <MirrorButton placement={renderPlacement} />
+                </div>
+              </div>
             </div>
           )}
         </div>

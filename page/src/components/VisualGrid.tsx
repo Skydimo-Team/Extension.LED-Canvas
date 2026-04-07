@@ -58,6 +58,7 @@ function readCanvasColors() {
     ledLockedFill: s.getPropertyValue('--led-locked-fill').trim() || 'rgba(245,158,11,0.55)',
     ledLockedStroke: s.getPropertyValue('--led-locked-stroke').trim() || 'rgba(245,158,11,0.85)',
     ledLockIcon: s.getPropertyValue('--led-lock-icon').trim() || 'rgba(255,255,255,0.95)',
+    ledIndexText: s.getPropertyValue('--led-index-text').trim() || 'rgba(255,255,255,0.96)',
     ledGhostStroke: s.getPropertyValue('--led-ghost-stroke').trim() || 'rgba(150,150,150,0.45)',
     handleFill: s.getPropertyValue('--handle-fill').trim() || 'rgba(100,149,237,0.9)',
     handleStroke: s.getPropertyValue('--handle-stroke').trim() || 'rgba(255,255,255,0.9)',
@@ -143,6 +144,11 @@ const LED_GAP_RATIO = 0.10
 const CANVAS_PREVIEW_GAP_RATIO = 0.10
 /** Corner radius as a fraction of the LED rect's shorter side */
 const LED_CORNER_RATIO = 0.20
+const LED_INDEX_TARGET_FONT_PX = 11
+const LED_INDEX_MIN_FONT_PX = 7.5
+const LED_INDEX_TEXT_WIDTH_RATIO = 0.84
+const LED_INDEX_TEXT_HEIGHT_RATIO = 0.66
+const LED_INDEX_CHAR_WIDTH_RATIO = 0.62
 
 /** Stroke a rounded-rect path with a dashed line (does NOT call save/restore). */
 function strokeDashedRoundRect(
@@ -263,6 +269,21 @@ function computeAllLeds(dev: PlacedDevice): LedRenderInfo[] {
   }
 
   return result
+}
+
+function getLedIndexFontSize(led: LedRenderInfo, stageScale: number) {
+  const widthPx = led.w * stageScale
+  const heightPx = led.h * stageScale
+  if (widthPx <= 0 || heightPx <= 0) return null
+
+  const digits = String(led.index).length
+  const maxByWidth = (widthPx * LED_INDEX_TEXT_WIDTH_RATIO)
+    / Math.max(1, digits * LED_INDEX_CHAR_WIDTH_RATIO)
+  const maxByHeight = heightPx * LED_INDEX_TEXT_HEIGHT_RATIO
+  const fontPx = Math.min(LED_INDEX_TARGET_FONT_PX, maxByWidth, maxByHeight)
+
+  if (!Number.isFinite(fontPx) || fontPx < LED_INDEX_MIN_FONT_PX) return null
+  return fontPx / stageScale
 }
 
 /* ── Resize states tracked in refs (avoids re-renders during drag) ── */
@@ -969,6 +990,28 @@ export function VisualGrid() {
                             fill={fill}
                             stroke={stroke}
                             strokeWidth={0.5 / stageScale}
+                          />
+                        )
+                      })()}
+                        {isSelected && (() => {
+                        const ledIndexFontSize = getLedIndexFontSize(led, stageScale)
+                        if (ledIndexFontSize == null) return null
+
+                        return (
+                          <Text
+                            x={led.x}
+                            y={led.y}
+                            width={led.w}
+                            height={led.h}
+                            text={String(led.index)}
+                            fontSize={ledIndexFontSize}
+                            fontStyle="bold"
+                            align="center"
+                            verticalAlign="middle"
+                            lineHeight={1}
+                            fill={c.ledIndexText}
+                            perfectDrawEnabled={false}
+                            listening={false}
                           />
                         )
                       })()}

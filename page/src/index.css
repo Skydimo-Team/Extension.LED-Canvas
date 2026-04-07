@@ -21,6 +21,7 @@
   --led-locked-fill: rgba(217, 138, 22, 0.42);
   --led-locked-stroke: rgba(217, 138, 22, 0.82);
   --led-lock-icon: rgba(255, 255, 255, 0.95);
+  --led-index-text: rgba(255, 255, 255, 0.96);
   --handle-fill: rgba(0, 103, 192, 0.88);
   --handle-stroke: rgba(255, 255, 255, 0.90);
   --rotate-handle-fill: rgba(0, 136, 255, 0.88);
@@ -134,6 +135,7 @@ h1 {
     --led-locked-fill: rgba(255, 182, 77, 0.36);
     --led-locked-stroke: rgba(255, 182, 77, 0.82);
     --led-lock-icon: rgba(255, 248, 235, 0.96);
+    --led-index-text: rgba(255, 255, 255, 0.96);
     --handle-fill: rgba(96, 205, 255, 0.88);
     --handle-stroke: rgba(255, 255, 255, 0.90);
     --rotate-handle-fill: rgba(0, 145, 255, 0.9);
