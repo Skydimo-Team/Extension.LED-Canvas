@@ -28,8 +28,9 @@ const supportedLocales = Object.keys(bundles)
 const DEFAULT_LOCALE = 'en-US'
 
 function resolveLocale(): string {
-  // 1. From host injection
+  // 1. From host injection or URL query param
   const injected = window.__SKYDIMO_EXT_PAGE__?.locale
+    ?? new URLSearchParams(window.location.search).get('locale')
   if (injected && supportedLocales.includes(injected)) return injected
 
   // 2. Base-language matching from navigator

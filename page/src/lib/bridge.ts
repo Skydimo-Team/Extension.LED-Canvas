@@ -7,7 +7,12 @@ import { setLocale } from './i18n'
 import type { Device, LedColor, Output, TreeDevice } from '@/types'
 import type { CanvasBounds, PlacedDevice } from './canvasStore'
 
-/* ── Globals injected by the host (Tauri init-script) ── */
+/* ── Connection info resolution ── */
+// Sources (in priority order):
+//  1. window.__SKYDIMO_EXT_PAGE__  — injected by Tauri bootstrap script (path mode)
+//  2. URL query params             — set by UI iframe loader (url mode) or manual dev
+//  3. Hardcoded fallback
+
 interface SkydimoExtPage {
   extId: string
   wsUrl: string
@@ -19,9 +24,11 @@ declare global {
   }
 }
 
+const _params = new URLSearchParams(window.location.search)
+
 const PAGE: SkydimoExtPage = {
-  extId: window.__SKYDIMO_EXT_PAGE__?.extId ?? 'led_canvas',
-  wsUrl: window.__SKYDIMO_EXT_PAGE__?.wsUrl ?? 'ws://127.0.0.1:42070',
+  extId: window.__SKYDIMO_EXT_PAGE__?.extId ?? _params.get('extId') ?? 'led_canvas',
+  wsUrl: window.__SKYDIMO_EXT_PAGE__?.wsUrl ?? _params.get('wsUrl') ?? 'ws://127.0.0.1:42070',
 }
 
 /* ── Layout types ── */
