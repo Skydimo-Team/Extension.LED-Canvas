@@ -1250,6 +1250,57 @@ emit_layout_status = function(layout, device_lookup)
     })
 end
 
+local function clamp_preview_channel(value)
+    local n = tonumber(value)
+    if not n or n ~= n then
+        return 0
+    end
+
+    n = math.floor(n + 0.5)
+    if n < 0 then return 0 end
+    if n > 255 then return 255 end
+    return n
+end
+
+local function rgb_bytes_to_led_colors(rgb_bytes)
+    local colors = {}
+    if type(rgb_bytes) ~= "table" then
+        return colors
+    end
+
+    local count = math.floor(#rgb_bytes / 3)
+    for i = 1, count do
+        local base = (i - 1) * 3 + 1
+        colors[i] = {
+            r = clamp_preview_channel(rgb_bytes[base]),
+            g = clamp_preview_channel(rgb_bytes[base + 1]),
+            b = clamp_preview_channel(rgb_bytes[base + 2]),
+        }
+    end
+
+    return colors
+end
+
+local function emit_layout_preview(layout_id, canvas_output, routed)
+    local placements = {}
+
+    for _, entry in pairs(routed) do
+        if type(entry) == "table" and type(entry.placementId) == "string" and entry.placementId ~= "" then
+            placements[#placements + 1] = {
+                placement_id = entry.placementId,
+                colors = type(entry.preview) == "table" and entry.preview or {},
+            }
+        end
+    end
+
+    ext.page_emit({
+        type = "preview_frame",
+        layout_id = layout_id,
+        canvas = rgb_bytes_to_led_colors(canvas_output),
+        placements = placements,
+    })
+end
+
 -- ── Extension Callbacks ─────────────────────────────────────────────
 
 function P.on_start()
@@ -1511,6 +1562,8 @@ function P.on_device_frame(port, outputs)
             ext.log("warn: set_leds failed for " .. entry.port .. "::" .. entry.outputId .. ": " .. tostring(err))
         end
     end
+
+    emit_layout_preview(layout_id, canvas_output, routed)
 end
 
 function P.on_stop()

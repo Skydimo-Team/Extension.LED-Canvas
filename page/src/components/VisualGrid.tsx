@@ -4,13 +4,12 @@ import type Konva from 'konva'
 import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch } from '@/lib/canvasStore'
 import { useBridgeStore } from '@/lib/bridge'
 import type { PlacedDevice } from '@/lib/canvasStore'
-import type { LedColor, TreeDevice } from '@/types'
+import type { LedColor } from '@/types'
 
 /* ── Default canvas bounds ── */
 const DEFAULT_CANVAS_W = 64
 const DEFAULT_CANVAS_H = 64
 const MIN_CANVAS_SIDE = 1
-const CANVAS_PORT_PREFIX = 'ext:led_canvas:canvas'
 const EMPTY_LED_COLORS: LedColor[] = []
 
 /* ── Grid cell constants: 1 cell = 1 LED point ── */
@@ -69,10 +68,6 @@ function readCanvasColors() {
   }
 }
 
-function canvasPort(layoutId: string) {
-  return `${CANVAS_PORT_PREFIX}:${layoutId}`
-}
-
 function mixChannel(value: number, target: number, amount: number) {
   return Math.round(value + (target - value) * amount)
 }
@@ -91,51 +86,6 @@ function devicePreviewFill(color: LedColor) {
 
 function devicePreviewStroke(color: LedColor) {
   return `rgba(${mixChannel(color.r, 0, 0.28)}, ${mixChannel(color.g, 0, 0.28)}, ${mixChannel(color.b, 0, 0.28)}, 0.98)`
-}
-
-function getOutputLedCount(output: TreeDevice['outputs'][number], fallback: number) {
-  return typeof output.leds_count === 'number' && output.leds_count >= 0
-    ? output.leds_count
-    : fallback
-}
-
-function resolvePlacementColors(
-  device: TreeDevice | undefined,
-  placement: PlacedDevice,
-  liveFramesByPort: Record<string, LedColor[]>,
-) {
-  const liveFrame = liveFramesByPort[placement.port]
-  if (!liveFrame?.length) return null
-  if (!device) return liveFrame.length === placement.ledsCount ? liveFrame : null
-
-  let outputOffset = 0
-  for (const output of device.outputs) {
-    const outputLedCount = getOutputLedCount(output, 0)
-    if (output.id !== placement.outputId) {
-      outputOffset += outputLedCount
-      continue
-    }
-
-    const outputColors = liveFrame.slice(outputOffset, outputOffset + outputLedCount)
-    if (!placement.segmentId) return outputColors
-
-    let segmentOffset = 0
-    for (const segment of output.segments) {
-      const segmentLedCount = typeof segment.leds_count === 'number' && segment.leds_count >= 0
-        ? segment.leds_count
-        : 0
-
-      if (segment.id === placement.segmentId) {
-        return outputColors.slice(segmentOffset, segmentOffset + segmentLedCount)
-      }
-
-      segmentOffset += segmentLedCount
-    }
-
-    return null
-  }
-
-  return null
 }
 
 /* ── Compute LED positions within a device block (relative to top-left) ── */
@@ -335,8 +285,7 @@ export function VisualGrid() {
   const setSelectedId = useCanvasStore(s => s.setSelectedId)
   const updateDevice = useCanvasStore(s => s.updateDevice)
   const updateCanvasBounds = useCanvasStore(s => s.updateCanvasBounds)
-  const bridgeDevices = useBridgeStore(s => s.devices)
-  const liveFramesByPort = useBridgeStore(s => s.liveFramesByPort)
+  const previewByLayoutId = useBridgeStore(s => s.previewByLayoutId)
   const activeLayoutId = useBridgeStore(s => s.activeLayoutId)
 
   const canvasRect = {
@@ -352,14 +301,8 @@ export function VisualGrid() {
     ),
   }
 
-  const devicesByPort = new Map<string, TreeDevice>()
-  for (const device of bridgeDevices) {
-    if (device.port) devicesByPort.set(device.port, device)
-  }
-
-  const canvasPreviewColors = activeLayoutId
-    ? (liveFramesByPort[canvasPort(activeLayoutId)] ?? EMPTY_LED_COLORS)
-    : EMPTY_LED_COLORS
+  const activeLayoutPreview = activeLayoutId ? previewByLayoutId[activeLayoutId] : undefined
+  const canvasPreviewColors = activeLayoutPreview?.canvas ?? EMPTY_LED_COLORS
 
   /* cache colors (re-read on theme change) */
   const [colors, setColors] = useState(readCanvasColors)
@@ -903,8 +846,7 @@ export function VisualGrid() {
               const blocked = new Set(dev.blockedLedIndices)
               const isStale = dev.stale
               const rotation = dev.rotation ?? 0
-              const liveDevice = devicesByPort.get(dev.port)
-              const placementColors = resolvePlacementColors(liveDevice, dev, liveFramesByPort)
+              const placementColors = activeLayoutPreview?.placementsById[dev.id]
 
               /* Rotation pivot is the center of the device bounding box. */
               const offsetX = dev.width / 2

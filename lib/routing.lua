@@ -447,7 +447,15 @@ function M.build(placements, grid_width, grid_height)
             ::continue::
         end
 
-        rt[key] = { port = p.port, outputId = p.outputId, segmentId = p.segmentId, brightness = p.brightness or 100, leds = entries }
+        rt[key] = {
+            port = p.port,
+            outputId = p.outputId,
+            segmentId = p.segmentId,
+            placementId = p.id,
+            localLedCount = p.ledsCount or total_leds,
+            brightness = p.brightness or 100,
+            leds = entries,
+        }
     end
 
     return rt
@@ -468,6 +476,12 @@ function M.route(canvas_colors, rt)
         local brightness = entry.brightness or 100
         local factor = brightness < 100 and (brightness / 100) or nil
         local colors = {}
+        local preview_colors = {}
+        local preview_count = max(0, floor((entry.localLedCount or 0) + 0.5))
+
+        for i = 1, preview_count do
+            preview_colors[i] = { r = 0, g = 0, b = 0 }
+        end
 
         for i = 1, n do
             local overlaps = leds[i].overlaps
@@ -489,15 +503,35 @@ function M.route(canvas_colors, rt)
                 b = b * factor
             end
 
+            local rr = floor(r + 0.5)
+            local gg = floor(g + 0.5)
+            local bb = floor(b + 0.5)
+
             colors[#colors + 1] = {
                 leds[i].target_idx or (i - 1),
-                floor(r + 0.5),
-                floor(g + 0.5),
-                floor(b + 0.5),
+                rr,
+                gg,
+                bb,
             }
+
+            local preview_idx = (leds[i].local_idx or (i - 1)) + 1
+            if preview_idx > 0 then
+                preview_colors[preview_idx] = {
+                    r = rr,
+                    g = gg,
+                    b = bb,
+                }
+            end
         end
 
-        result[key] = { port = entry.port, outputId = entry.outputId, segmentId = entry.segmentId, colors = colors }
+        result[key] = {
+            port = entry.port,
+            outputId = entry.outputId,
+            segmentId = entry.segmentId,
+            placementId = entry.placementId,
+            colors = colors,
+            preview = preview_colors,
+        }
     end
 
     return result

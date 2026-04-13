@@ -81,6 +81,11 @@ export interface LayoutVirtualDeviceState {
   effect_params: Record<string, unknown>
 }
 
+export interface LayoutPreviewFrame {
+  canvas: LedColor[]
+  placementsById: Record<string, LedColor[]>
+}
+
 export interface LayoutInfo {
   id: string
   name: string
@@ -97,7 +102,7 @@ type ConnectionStatus = 'disconnected' | 'connecting' | 'connected'
 interface BridgeState {
   status: ConnectionStatus
   devices: TreeDevice[]
-  liveFramesByPort: Record<string, LedColor[]>
+  previewByLayoutId: Record<string, LayoutPreviewFrame>
   effects: EffectInfo[]
   /** All layouts from the backend */
   layouts: LayoutInfo[]
@@ -204,34 +209,62 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     const hash = JSON.stringify(normalized)
     if (hash === lastDeviceHash) return
     lastDeviceHash = hash
-    set(s => {
-      const knownPorts = new Set(
-        normalized
-          .map(device => device.port)
-          .filter((port): port is string => typeof port === 'string' && port.length > 0),
-      )
-
-      return {
-        devices: normalized,
-        liveFramesByPort: Object.fromEntries(
-          Object.entries(s.liveFramesByPort).filter(([port]) => knownPorts.has(port)),
-        ),
-      }
-    })
+    set({ devices: normalized })
   }
 
-  function hasAnyRegistered(layouts: LayoutInfo[]): boolean {
-    return layouts.some(l => l.registered)
+  function normalizePlacementPreviewMap(placements: unknown): Record<string, LedColor[]> {
+    if (!Array.isArray(placements)) return {}
+
+    return placements.reduce<Record<string, LedColor[]>>((acc, placement) => {
+      if (!placement || typeof placement !== 'object') return acc
+
+      const payload = placement as Record<string, unknown>
+      const placementId = typeof payload.placement_id === 'string' ? payload.placement_id : null
+      if (!placementId) return acc
+
+      acc[placementId] = normalizeLedColors(payload.colors)
+      return acc
+    }, {})
+  }
+
+  function retainRegisteredPreviews(
+    layouts: LayoutInfo[],
+    previewByLayoutId: Record<string, LayoutPreviewFrame>,
+  ): Record<string, LayoutPreviewFrame> {
+    const registeredIds = new Set(
+      layouts
+        .filter(layout => layout.registered)
+        .map(layout => layout.id),
+    )
+
+    return Object.fromEntries(
+      Object.entries(previewByLayoutId).filter(([layoutId]) => registeredIds.has(layoutId)),
+    )
+  }
+
+  function applyPreviewFrame(data: Record<string, unknown>) {
+    const layoutId = typeof data.layout_id === 'string' ? data.layout_id : null
+    if (!layoutId) return
+
+    set(s => ({
+      previewByLayoutId: {
+        ...s.previewByLayoutId,
+        [layoutId]: {
+          canvas: normalizeLedColors(data.canvas),
+          placementsById: normalizePlacementPreviewMap(data.placements),
+        },
+      },
+    }))
   }
 
   function applyFullState(data: Record<string, unknown>) {
     if (!data) return
     const layouts = normalizeLayouts(data.layouts)
-    set({
+    set(s => ({
       layouts,
       activeLayoutId: (data.active_layout_id as string | undefined) ?? layouts[0]?.id ?? null,
-      ...(!hasAnyRegistered(layouts) && { liveFramesByPort: {} }),
-    })
+      previewByLayoutId: retainRegisteredPreviews(layouts, s.previewByLayoutId),
+    }))
   }
 
   function applyLayoutStatus(data: Record<string, unknown>) {
@@ -243,9 +276,16 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
       const nextLayouts = existingIndex === -1
         ? [...s.layouts, updated]
         : s.layouts.map(l => l.id === updated.id ? updated : l)
+
+      const nextPreviews = updated.registered
+        ? retainRegisteredPreviews(nextLayouts, s.previewByLayoutId)
+        : Object.fromEntries(
+          Object.entries(s.previewByLayoutId).filter(([layoutId]) => layoutId !== updated.id),
+        )
+
       return {
         layouts: nextLayouts,
-        ...(!hasAnyRegistered(nextLayouts) && { liveFramesByPort: {} }),
+        previewByLayoutId: nextPreviews,
       }
     })
   }
@@ -272,22 +312,6 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
         const params = msg.params as Record<string, unknown>
         const { event, data } = params as { event: string; data: Record<string, unknown> }
 
-        if (event === 'device-led-update') {
-          if (!hasAnyRegistered(get().layouts)) return
-
-          const payload = data as Record<string, unknown>
-          const port = typeof payload.port === 'string' ? payload.port : null
-          if (!port) return
-
-          set(s => ({
-            liveFramesByPort: {
-              ...s.liveFramesByPort,
-              [port]: normalizeLedColors(payload.colors),
-            },
-          }))
-          return
-        }
-
         if (event === 'locale-changed') {
           const locale = typeof data?.locale === 'string' ? data.locale : null
           if (locale) setLocale(locale)
@@ -304,6 +328,9 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
           if (data?.type === 'layout_status') {
             applyLayoutStatus(data as Record<string, unknown>)
           }
+          if (data?.type === 'preview_frame') {
+            applyPreviewFrame(data as Record<string, unknown>)
+          }
           if (data?.type === 'effects_catalog') {
             set({ effects: normalizeEffects((data as Record<string, unknown>).effects) })
           }
@@ -314,7 +341,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     ws.onclose = () => {
       set({
         status: 'disconnected',
-        liveFramesByPort: {},
+        previewByLayoutId: {},
       })
       reconnectTimer = setTimeout(doConnect, 3000)
     }
@@ -325,7 +352,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
   return {
     status: 'disconnected',
     devices: [],
-    liveFramesByPort: {},
+    previewByLayoutId: {},
     effects: [],
     layouts: [],
     activeLayoutId: null,
@@ -440,7 +467,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
       set({
         status: 'disconnected',
         devices: [],
-        liveFramesByPort: {},
+        previewByLayoutId: {},
         effects: [],
         layouts: [],
         activeLayoutId: null,
