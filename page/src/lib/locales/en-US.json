@@ -16,7 +16,7 @@
   "canvas.deactivate": "Deactivate canvas",
   "canvas.register": "Register device",
   "canvas.help.ariaLabel": "LED canvas help",
-  "canvas.help.description": "LED canvas lets multiple devices register their LEDs as one virtual device, so lighting effects can stay more consistent.",
+  "canvas.help.description": "LED canvas lets multiple devices register their LEDs as one virtual device so lighting effects can stay more consistent. Double-click a device to edit LEDs, keep dragging the canvas while editing, hold Ctrl to multi-select LEDs, and use Ctrl+Z to undo edit steps.",
   "snap.on": "Grid snap: on",
   "snap.off": "Grid snap: off",
   "device.panel": "Devices",

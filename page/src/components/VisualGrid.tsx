@@ -310,6 +310,14 @@ interface CanvasResizeState {
   bottom: number
 }
 
+interface EditDragPreview {
+  deviceId: string
+  anchorLedIndex: number
+  ledIndices: number[]
+  deltaCol: number
+  deltaRow: number
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -342,6 +350,7 @@ export function VisualGrid() {
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [stageScale, setStageScale] = useState(1)
   const [draggingLedKey, setDraggingLedKey] = useState<string | null>(null)
+  const [editDragPreview, setEditDragPreview] = useState<EditDragPreview | null>(null)
 
   /* store state */
   const placedDevices = useCanvasStore(s => s.placedDevices)
@@ -361,14 +370,21 @@ export function VisualGrid() {
   const editingAvailableLedCount = useCanvasStore(s => s.editingAvailableLedCount)
   const preEditMatrix = useCanvasStore(s => s.preEditMatrix)
   const editingOrigin = useCanvasStore(s => s.editingOrigin)
+  const selectedEditLedIndices = useCanvasStore(s => s.selectedEditLedIndices)
   const enterEditMode = useCanvasStore(s => s.enterEditMode)
   const exitEditMode = useCanvasStore(s => s.exitEditMode)
-  const moveLed = useCanvasStore(s => s.moveLed)
+  const setEditLedSelection = useCanvasStore(s => s.setEditLedSelection)
+  const toggleEditLedSelection = useCanvasStore(s => s.toggleEditLedSelection)
+  const clearEditLedSelection = useCanvasStore(s => s.clearEditLedSelection)
+  const moveEditLeds = useCanvasStore(s => s.moveEditLeds)
   const isEditMode = editingDeviceId !== null
+  const selectedEditLedSet = useMemo(() => new Set(selectedEditLedIndices), [selectedEditLedIndices])
 
   useEffect(() => {
     if (!isEditMode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- local drag state must reset immediately when edit mode closes
       setDraggingLedKey(null)
+      setEditDragPreview(null)
     }
   }, [isEditMode])
 
@@ -872,18 +888,26 @@ export function VisualGrid() {
 
   /* ── Click empty space to deselect ── */
   const handleStageClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (isEditMode) return
-    if (e.target === stageRef.current) {
-      setSelectedId(null)
+    if (e.target !== stageRef.current) return
+
+    if (isEditMode) {
+      clearEditLedSelection()
+      return
     }
-  }, [isEditMode, setSelectedId])
+
+    setSelectedId(null)
+  }, [clearEditLedSelection, isEditMode, setSelectedId])
 
   const handleStageTap = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
-    if (isEditMode) return
-    if (e.target === stageRef.current) {
-      setSelectedId(null)
+    if (e.target !== stageRef.current) return
+
+    if (isEditMode) {
+      clearEditLedSelection()
+      return
     }
-  }, [isEditMode, setSelectedId])
+
+    setSelectedId(null)
+  }, [clearEditLedSelection, isEditMode, setSelectedId])
 
   /* ── Keyboard: Delete/Escape ── */
   useEffect(() => {
@@ -931,6 +955,15 @@ export function VisualGrid() {
     if (stage) stage.container().style.cursor = cursor
   }
 
+  const selectEditLed = useCallback((ledIndex: number, additive: boolean) => {
+    if (additive) {
+      toggleEditLedSelection(ledIndex, true)
+      return
+    }
+
+    setEditLedSelection([ledIndex])
+  }, [setEditLedSelection, toggleEditLedSelection])
+
   return (
     <div
       ref={containerRef}
@@ -941,7 +974,7 @@ export function VisualGrid() {
           ref={stageRef}
           width={size.width}
           height={size.height}
-          draggable={!isEditMode}
+          draggable={draggingLedKey == null}
           onWheel={handleWheel}
           onClick={handleStageClick}
           onTap={handleStageTap}
@@ -1040,6 +1073,24 @@ export function VisualGrid() {
                   return leds
                 })()
                 : null
+              const activeEditDragPreview = isBeingEdited && editDragPreview?.deviceId === dev.id
+                ? editDragPreview
+                : null
+              const editPreviewCells = editLedCells && activeEditDragPreview
+                ? (() => {
+                  const preview = new Map<number, { col: number; row: number }>()
+                  for (const selectedLedIndex of activeEditDragPreview.ledIndices) {
+                    const source = editLedCells.find((entry) => entry.index === selectedLedIndex)
+                    if (!source || source.ghost) continue
+
+                    preview.set(selectedLedIndex, {
+                      col: source.col + activeEditDragPreview.deltaCol,
+                      row: source.row + activeEditDragPreview.deltaRow,
+                    })
+                  }
+                  return preview
+                })()
+                : null
               const cancelLabel = t('editMode.cancel')
               const confirmLabel = t('editMode.confirm')
 
@@ -1059,11 +1110,21 @@ export function VisualGrid() {
                   onDragEnd={handleDeviceDragEnd(dev.id)}
                   onClick={(e) => {
                     e.cancelBubble = true
-                    if (!isEditMode) setSelectedId(dev.id)
+                    if (isEditMode) {
+                      clearEditLedSelection()
+                      return
+                    }
+
+                    setSelectedId(dev.id)
                   }}
                   onTap={(e) => {
                     e.cancelBubble = true
-                    if (!isEditMode) setSelectedId(dev.id)
+                    if (isEditMode) {
+                      clearEditLedSelection()
+                      return
+                    }
+
+                    setSelectedId(dev.id)
                   }}
                   onDblClick={(e) => {
                     e.cancelBubble = true
@@ -1141,22 +1202,51 @@ export function VisualGrid() {
                   {editCellMetrics && editLedCells?.map(led => {
                     if (led.ghost) return null
 
+                    const ledKey = `${dev.id}:${led.index}`
+                    const isLedSelected = selectedEditLedSet.has(led.index)
+                    const previewCell = editPreviewCells?.get(led.index)
+                    const isDraggedAnchor = draggingLedKey === ledKey
+                    const rectCol = previewCell && !isDraggedAnchor ? previewCell.col : led.col
+                    const rectRow = previewCell && !isDraggedAnchor ? previewCell.row : led.row
+                    const rectX = rectCol * editCellMetrics.cellW + editCellMetrics.gapW / 2
+                    const rectY = rectRow * editCellMetrics.cellH + editCellMetrics.gapH / 2
+
                     return (
                       <Rect
                         key={`edit-led-${led.index}`}
-                        _useStrictMode={draggingLedKey !== `${dev.id}:${led.index}`}
-                        x={led.col * editCellMetrics.cellW + editCellMetrics.gapW / 2}
-                        y={led.row * editCellMetrics.cellH + editCellMetrics.gapH / 2}
+                        _useStrictMode={draggingLedKey !== ledKey}
+                        x={rectX}
+                        y={rectY}
                         width={editCellMetrics.ledW}
                         height={editCellMetrics.ledH}
                         cornerRadius={editCellMetrics.cr}
-                        fill={c.editLedDrag}
-                        stroke={c.deviceSelectedStroke}
-                        strokeWidth={Math.max(0.08, 0.8 / stageScale)}
+                        fill={isLedSelected ? c.editLedDrag : c.deviceFill}
+                        stroke={isLedSelected ? c.deviceSelectedStroke : c.deviceStroke}
+                        strokeWidth={Math.max(0.08, (isLedSelected ? 1 : 0.65) / stageScale)}
                         draggable
+                        onClick={(e) => {
+                          e.cancelBubble = true
+                          selectEditLed(led.index, e.evt.ctrlKey || e.evt.metaKey)
+                        }}
+                        onTap={(e) => {
+                          e.cancelBubble = true
+                          selectEditLed(led.index, false)
+                        }}
                         onDragStart={(e) => {
                           e.cancelBubble = true
-                          setDraggingLedKey(`${dev.id}:${led.index}`)
+                          const dragSelection = isLedSelected ? selectedEditLedIndices : [led.index]
+                          if (!isLedSelected) {
+                            setEditLedSelection([led.index])
+                          }
+
+                          setDraggingLedKey(ledKey)
+                          setEditDragPreview({
+                            deviceId: dev.id,
+                            anchorLedIndex: led.index,
+                            ledIndices: dragSelection,
+                            deltaCol: 0,
+                            deltaRow: 0,
+                          })
                           updateCursor('grabbing')
                         }}
                         dragBoundFunc={(pos) => {
@@ -1175,11 +1265,44 @@ export function VisualGrid() {
                           })
                           return target
                         }}
+                        onDragMove={(e) => {
+                          e.cancelBubble = true
+                          const groupNode = stageRef.current?.findOne(`#edit-group-${dev.id}`)
+                          if (!groupNode) return
+
+                          const transform = groupNode.getAbsoluteTransform()
+                          const inv = transform.copy().invert()
+                          const local = inv.point({
+                            x: e.target.absolutePosition().x,
+                            y: e.target.absolutePosition().y,
+                          })
+                          const newCol = Math.round((local.x - editCellMetrics.gapW / 2) / editCellMetrics.cellW)
+                          const newRow = Math.round((local.y - editCellMetrics.gapH / 2) / editCellMetrics.cellH)
+
+                          setEditDragPreview((prev) => {
+                            if (!prev || prev.deviceId !== dev.id || prev.anchorLedIndex !== led.index) {
+                              return prev
+                            }
+
+                            const nextDeltaCol = newCol - led.col
+                            const nextDeltaRow = newRow - led.row
+                            if (prev.deltaCol === nextDeltaCol && prev.deltaRow === nextDeltaRow) {
+                              return prev
+                            }
+
+                            return {
+                              ...prev,
+                              deltaCol: nextDeltaCol,
+                              deltaRow: nextDeltaRow,
+                            }
+                          })
+                        }}
                         onDragEnd={(e) => {
                           e.cancelBubble = true
                           const node = e.target
                           const groupNode = stageRef.current?.findOne(`#edit-group-${dev.id}`)
                           if (!groupNode) {
+                            setEditDragPreview(null)
                             setDraggingLedKey(null)
                             updateCursor('default')
                             return
@@ -1190,12 +1313,15 @@ export function VisualGrid() {
                           const local = inv.point({ x: node.absolutePosition().x, y: node.absolutePosition().y })
                           const newCol = Math.round((local.x - editCellMetrics.gapW / 2) / editCellMetrics.cellW)
                           const newRow = Math.round((local.y - editCellMetrics.gapH / 2) / editCellMetrics.cellH)
+                          const dragSelection = activeEditDragPreview?.anchorLedIndex === led.index
+                            ? activeEditDragPreview.ledIndices
+                            : (isLedSelected ? selectedEditLedIndices : [led.index])
 
+                          setEditDragPreview(null)
                           setDraggingLedKey(null)
-                          moveLed(led.index, newCol, newRow)
+                          moveEditLeds(led.index, newCol, newRow, dragSelection)
                           updateCursor('grab')
                         }}
-                        onDragMove={(e) => { e.cancelBubble = true }}
                         onMouseEnter={() => updateCursor('grab')}
                         onMouseLeave={() => updateCursor('default')}
                         onMouseDown={() => updateCursor('grabbing')}
@@ -1207,10 +1333,11 @@ export function VisualGrid() {
                   {editCellMetrics && editLedCells?.map(led => {
                     if (led.ghost) return null
 
+                      const previewCell = editPreviewCells?.get(led.index)
                       const lri: LedRenderInfo = {
                         index: led.index,
-                        x: led.col * editCellMetrics.cellW + editCellMetrics.gapW / 2,
-                        y: led.row * editCellMetrics.cellH + editCellMetrics.gapH / 2,
+                        x: (previewCell?.col ?? led.col) * editCellMetrics.cellW + editCellMetrics.gapW / 2,
+                        y: (previewCell?.row ?? led.row) * editCellMetrics.cellH + editCellMetrics.gapH / 2,
                         w: editCellMetrics.ledW,
                         h: editCellMetrics.ledH,
                         cr: editCellMetrics.cr,

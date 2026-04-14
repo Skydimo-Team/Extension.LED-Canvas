@@ -16,7 +16,7 @@
   "canvas.deactivate": "Tuvali devre dışı bırak",
   "canvas.register": "Cihazı kaydet",
   "canvas.help.ariaLabel": "LED tuval yardımı",
-  "canvas.help.description": "LED tuval, birden fazla cihazın LED'lerini tek bir sanal cihaz olarak kaydetmenizi sağlar; böylece ışık efektleri daha tutarlı kalır.",
+  "canvas.help.description": "LED tuval, birden fazla cihazın LED'lerini tek bir sanal cihaz olarak kaydetmenizi sağlar; böylece ışık efektleri daha tutarlı kalır. Bir cihaza çift tıklayarak LED düzenlemeye girin, düzenleme sırasında tuvali sürüklemeye devam edin, çoklu seçim için Ctrl basılı tutun ve düzenleme adımlarını geri almak için Ctrl+Z kullanın.",
   "snap.on": "Izgara yapışması: açık",
   "snap.off": "Izgara yapışması: kapalı",
   "device.panel": "Cihazlar",

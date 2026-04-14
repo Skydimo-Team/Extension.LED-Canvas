@@ -51,6 +51,11 @@ export interface PlacedDevice {
   originalAspect: number
 }
 
+interface EditHistoryEntry {
+  matrix: Matrix
+  origin: { col: number; row: number } | null
+}
+
 interface CanvasState {
   /** The layout id this canvas state belongs to (null = not yet hydrated) */
   layoutId: string | null
@@ -71,6 +76,12 @@ interface CanvasState {
   preEditMatrix: Matrix | null
   /** Cell offset of the editing matrix relative to the placement's original top-left */
   editingOrigin: { col: number; row: number } | null
+  /** Selected editable LEDs during edit mode */
+  selectedEditLedIndices: number[]
+  /** Local undo stack for edit mode operations */
+  editHistoryPast: EditHistoryEntry[]
+  /** Local redo stack for edit mode operations */
+  editHistoryFuture: EditHistoryEntry[]
 
   addDevice: (info: {
     deviceId: string
@@ -93,7 +104,12 @@ interface CanvasState {
 
   enterEditMode: (deviceId: string, liveLedsCount?: number) => void
   exitEditMode: (confirm: boolean) => void
-  moveLed: (ledIndex: number, toCol: number, toRow: number) => void
+  setEditLedSelection: (ledIndices: number[]) => void
+  toggleEditLedSelection: (ledIndex: number, additive: boolean) => void
+  clearEditLedSelection: () => void
+  moveEditLeds: (anchorLedIndex: number, toCol: number, toRow: number, ledIndices?: number[]) => boolean
+  undoEdit: () => void
+  redoEdit: () => void
 
   /** Replace local state with data from a backend layout snapshot */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -355,10 +371,171 @@ function trimMatrixToOccupiedBounds(
   }
 }
 
+function trimHistoryEntries<T>(entries: T[]) {
+  return entries.length > TEMPORAL_LIMIT
+    ? entries.slice(entries.length - TEMPORAL_LIMIT)
+    : entries
+}
+
 function trimPastStates(pastStates: Partial<CanvasHistoryState>[]) {
-  return pastStates.length > TEMPORAL_LIMIT
-    ? pastStates.slice(pastStates.length - TEMPORAL_LIMIT)
-    : pastStates
+  return trimHistoryEntries(pastStates)
+}
+
+function cloneEditHistoryEntry(entry: EditHistoryEntry): EditHistoryEntry {
+  return {
+    matrix: structuredClone(entry.matrix),
+    origin: entry.origin ? { ...entry.origin } : null,
+  }
+}
+
+function buildEditHistoryEntry(
+  matrix: Matrix,
+  origin: { col: number; row: number } | null,
+): EditHistoryEntry {
+  return {
+    matrix: structuredClone(matrix),
+    origin: origin ? { ...origin } : null,
+  }
+}
+
+function normalizeEditLedSelection(ledIndices: Iterable<number>, editableLedCount: number) {
+  const seen = new Set<number>()
+  const normalized: number[] = []
+
+  for (const rawIndex of ledIndices) {
+    const ledIndex = Math.floor(rawIndex)
+    if (!Number.isFinite(ledIndex) || ledIndex < 0 || ledIndex >= editableLedCount || seen.has(ledIndex)) {
+      continue
+    }
+
+    seen.add(ledIndex)
+    normalized.push(ledIndex)
+  }
+
+  return normalized
+}
+
+function findLedPositions(matrix: Matrix, ledIndices: number[]) {
+  const lookup = new Set(ledIndices)
+  const positions = new Map<number, { col: number; row: number }>()
+
+  for (let offset = 0; offset < matrix.map.length; offset += 1) {
+    const ledIndex = matrix.map[offset]
+    if (!lookup.has(ledIndex)) continue
+
+    positions.set(ledIndex, {
+      col: offset % matrix.width,
+      row: Math.floor(offset / matrix.width),
+    })
+
+    if (positions.size === lookup.size) {
+      break
+    }
+  }
+
+  return positions
+}
+
+function applyEditLedMove(
+  matrix: Matrix,
+  origin: { col: number; row: number } | null,
+  selection: number[],
+  anchorLedIndex: number,
+  targetCol: number,
+  targetRow: number,
+  editableLedCount: number,
+): { matrix: Matrix; origin: { col: number; row: number } } | null {
+  const activeSelection = normalizeEditLedSelection(selection, editableLedCount)
+  if (activeSelection.length === 0) return null
+
+  const positions = findLedPositions(matrix, activeSelection)
+  const anchorPosition = positions.get(anchorLedIndex)
+  if (!anchorPosition || positions.size !== activeSelection.length) return null
+
+  const nextAnchorCol = Math.round(targetCol)
+  const nextAnchorRow = Math.round(targetRow)
+  if (!Number.isFinite(nextAnchorCol) || !Number.isFinite(nextAnchorRow)) return null
+
+  const deltaCol = nextAnchorCol - anchorPosition.col
+  const deltaRow = nextAnchorRow - anchorPosition.row
+  if (deltaCol === 0 && deltaRow === 0) return null
+
+  let minTargetCol = Number.POSITIVE_INFINITY
+  let minTargetRow = Number.POSITIVE_INFINITY
+  let maxTargetCol = Number.NEGATIVE_INFINITY
+  let maxTargetRow = Number.NEGATIVE_INFINITY
+
+  for (const ledIndex of activeSelection) {
+    const position = positions.get(ledIndex)
+    if (!position) return null
+
+    minTargetCol = Math.min(minTargetCol, position.col + deltaCol)
+    minTargetRow = Math.min(minTargetRow, position.row + deltaRow)
+    maxTargetCol = Math.max(maxTargetCol, position.col + deltaCol)
+    maxTargetRow = Math.max(maxTargetRow, position.row + deltaRow)
+  }
+
+  let width = matrix.width
+  let height = matrix.height
+  let newMap = [...matrix.map]
+  let nextOrigin = origin ? { ...origin } : { col: 0, row: 0 }
+
+  const expandLeft = Math.max(0, -minTargetCol)
+  const expandTop = Math.max(0, -minTargetRow)
+  const expandRight = Math.max(0, maxTargetCol - (width - 1))
+  const expandBottom = Math.max(0, maxTargetRow - (height - 1))
+
+  if (expandLeft > 0 || expandTop > 0 || expandRight > 0 || expandBottom > 0) {
+    const nextWidth = width + expandLeft + expandRight
+    const nextHeight = height + expandTop + expandBottom
+    const expanded = new Array<number>(nextWidth * nextHeight).fill(-1)
+
+    for (let row = 0; row < height; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        expanded[(row + expandTop) * nextWidth + (col + expandLeft)] = newMap[row * width + col]
+      }
+    }
+
+    newMap = expanded
+    width = nextWidth
+    height = nextHeight
+    nextOrigin = {
+      col: nextOrigin.col - expandLeft,
+      row: nextOrigin.row - expandTop,
+    }
+  }
+
+  const selectionSet = new Set(activeSelection)
+  const targets = activeSelection.map((ledIndex) => {
+    const position = positions.get(ledIndex)!
+    return {
+      ledIndex,
+      sourceCol: position.col + expandLeft,
+      sourceRow: position.row + expandTop,
+      targetCol: position.col + expandLeft + deltaCol,
+      targetRow: position.row + expandTop + deltaRow,
+    }
+  })
+
+  for (const target of targets) {
+    const targetIndex = target.targetRow * width + target.targetCol
+    if (targetIndex < 0 || targetIndex >= newMap.length) return null
+
+    const occupant = newMap[targetIndex]
+    if (occupant >= 0 && !selectionSet.has(occupant)) {
+      return null
+    }
+  }
+
+  for (const target of targets) {
+    newMap[target.sourceRow * width + target.sourceCol] = -1
+  }
+
+  for (const target of targets) {
+    newMap[target.targetRow * width + target.targetCol] = target.ledIndex
+  }
+
+  return trimMatrixToOccupiedBounds({ width, height, map: newMap }, nextOrigin)
 }
 
 /** Convert a backend placement record into a PlacedDevice with canvas offset */
@@ -405,6 +582,9 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
   editingGridSize: null,
   preEditMatrix: null,
   editingOrigin: null,
+  selectedEditLedIndices: [],
+  editHistoryPast: [],
+  editHistoryFuture: [],
 
   hydrateFromLayout(layoutId, canvas, placements, snapToGrid) {
     // Pause tracking so the hydration itself is not recorded as undoable
@@ -433,6 +613,9 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
       editingGridSize: null,
       preEditMatrix: null,
       editingOrigin: null,
+      selectedEditLedIndices: [],
+      editHistoryPast: [],
+      editHistoryFuture: [],
     })
 
     // Clear history and resume tracking after hydration
@@ -503,6 +686,9 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
       editingGridSize: s.editingDeviceId === id ? null : s.editingGridSize,
       preEditMatrix: s.editingDeviceId === id ? null : s.preEditMatrix,
       editingOrigin: s.editingDeviceId === id ? null : s.editingOrigin,
+      selectedEditLedIndices: s.editingDeviceId === id ? [] : s.selectedEditLedIndices,
+      editHistoryPast: s.editingDeviceId === id ? [] : s.editHistoryPast,
+      editHistoryFuture: s.editingDeviceId === id ? [] : s.editHistoryFuture,
     }))
   },
 
@@ -586,6 +772,9 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
       editingGridSize: { cols: editingMatrix.width, rows: editingMatrix.height },
       preEditMatrix,
       editingOrigin: { col: 0, row: 0 },
+      selectedEditLedIndices: [],
+      editHistoryPast: [],
+      editHistoryFuture: [],
       selectedId: deviceId,
     })
   },
@@ -617,6 +806,9 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
         editingGridSize: null,
         preEditMatrix: null,
         editingOrigin: null,
+        selectedEditLedIndices: [],
+        editHistoryPast: [],
+        editHistoryFuture: [],
       })
 
       temporal.getState().resume()
@@ -632,91 +824,124 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
         editingGridSize: null,
         preEditMatrix: null,
         editingOrigin: null,
+        selectedEditLedIndices: [],
+        editHistoryPast: [],
+        editHistoryFuture: [],
       })
       getTemporalStore().getState().resume()
     }
   },
 
-  moveLed(ledIndex, toCol, toRow) {
+  setEditLedSelection(ledIndices) {
     const state = get()
-    const { editingMatrix } = state
-    if (!editingMatrix) return
-    const editingAvailableLedCount = state.editingAvailableLedCount ?? Number.MAX_SAFE_INTEGER
-    if (ledIndex >= editingAvailableLedCount) return
+    if (!state.editingMatrix) return
 
-    const targetCol = Math.round(toCol)
-    const targetRow = Math.round(toRow)
-    if (!Number.isFinite(targetCol) || !Number.isFinite(targetRow)) return
+    const editableLedCount = state.editingAvailableLedCount ?? Number.MAX_SAFE_INTEGER
+    set({
+      selectedEditLedIndices: normalizeEditLedSelection(ledIndices, editableLedCount),
+    })
+  },
 
-    let { width, height } = editingMatrix
-    let newMap = [...editingMatrix.map]
-    let nextOrigin = state.editingOrigin ?? { col: 0, row: 0 }
+  toggleEditLedSelection(ledIndex, additive) {
+    const state = get()
+    if (!state.editingMatrix) return
 
-    const oldPos = newMap.indexOf(ledIndex)
-    const oldCol = oldPos >= 0 ? oldPos % width : -1
-    const oldRow = oldPos >= 0 ? Math.floor(oldPos / width) : -1
+    const editableLedCount = state.editingAvailableLedCount ?? Number.MAX_SAFE_INTEGER
+    const normalized = normalizeEditLedSelection([ledIndex], editableLedCount)
+    if (normalized.length === 0) return
 
-    let shiftedTargetCol = targetCol
-    let shiftedTargetRow = targetRow
-
-    const expandLeft = Math.max(0, -shiftedTargetCol)
-    const expandTop = Math.max(0, -shiftedTargetRow)
-    const expandRight = Math.max(0, shiftedTargetCol - (width - 1))
-    const expandBottom = Math.max(0, shiftedTargetRow - (height - 1))
-
-    if (expandLeft > 0 || expandTop > 0 || expandRight > 0 || expandBottom > 0) {
-      const nextWidth = width + expandLeft + expandRight
-      const nextHeight = height + expandTop + expandBottom
-      const expanded = new Array<number>(nextWidth * nextHeight).fill(-1)
-
-      for (let row = 0; row < height; row += 1) {
-        for (let col = 0; col < width; col += 1) {
-          expanded[(row + expandTop) * nextWidth + (col + expandLeft)] = newMap[row * width + col]
-        }
-      }
-
-      newMap = expanded
-      width = nextWidth
-      height = nextHeight
-      shiftedTargetCol += expandLeft
-      shiftedTargetRow += expandTop
-      nextOrigin = {
-        col: nextOrigin.col - expandLeft,
-        row: nextOrigin.row - expandTop,
-      }
-    }
-
-    const shiftedOldPos = oldPos >= 0
-      ? (oldRow + expandTop) * width + (oldCol + expandLeft)
-      : -1
-    const targetIdx = shiftedTargetRow * width + shiftedTargetCol
-
-    if (targetIdx < 0 || targetIdx >= newMap.length) return
-
-    if (shiftedOldPos === targetIdx) {
-      const trimmed = trimMatrixToOccupiedBounds({ width, height, map: newMap }, nextOrigin)
-      set({
-        editingMatrix: trimmed.matrix,
-        editingGridSize: { cols: trimmed.matrix.width, rows: trimmed.matrix.height },
-        editingOrigin: trimmed.origin,
-      })
+    if (!additive) {
+      set({ selectedEditLedIndices: normalized })
       return
     }
 
-    const displacedLed = newMap[targetIdx]
-    if (displacedLed >= editingAvailableLedCount) return
-
-    if (shiftedOldPos >= 0) {
-      newMap[shiftedOldPos] = displacedLed >= 0 ? displacedLed : -1
-    }
-    newMap[targetIdx] = ledIndex
-
-    const trimmed = trimMatrixToOccupiedBounds({ width, height, map: newMap }, nextOrigin)
+    const targetLedIndex = normalized[0]
+    const currentSelection = normalizeEditLedSelection(state.selectedEditLedIndices, editableLedCount)
+    const isSelected = currentSelection.includes(targetLedIndex)
 
     set({
-      editingMatrix: trimmed.matrix,
-      editingGridSize: { cols: trimmed.matrix.width, rows: trimmed.matrix.height },
-      editingOrigin: trimmed.origin,
+      selectedEditLedIndices: isSelected
+        ? currentSelection.filter(index => index !== targetLedIndex)
+        : [...currentSelection, targetLedIndex],
+    })
+  },
+
+  clearEditLedSelection() {
+    set({ selectedEditLedIndices: [] })
+  },
+
+  moveEditLeds(anchorLedIndex, toCol, toRow, ledIndices) {
+    const state = get()
+    const { editingMatrix } = state
+    if (!editingMatrix) return false
+
+    const editingAvailableLedCount = state.editingAvailableLedCount ?? Number.MAX_SAFE_INTEGER
+    const currentSelection = normalizeEditLedSelection(
+      ledIndices?.length ? ledIndices : state.selectedEditLedIndices,
+      editingAvailableLedCount,
+    )
+    const activeSelection = currentSelection.includes(anchorLedIndex)
+      ? currentSelection
+      : normalizeEditLedSelection([anchorLedIndex], editingAvailableLedCount)
+
+    const nextState = applyEditLedMove(
+      editingMatrix,
+      state.editingOrigin,
+      activeSelection,
+      anchorLedIndex,
+      toCol,
+      toRow,
+      editingAvailableLedCount,
+    )
+    if (!nextState) return false
+
+    set({
+      editingMatrix: nextState.matrix,
+      editingGridSize: { cols: nextState.matrix.width, rows: nextState.matrix.height },
+      editingOrigin: nextState.origin,
+      selectedEditLedIndices: activeSelection,
+      editHistoryPast: trimHistoryEntries([
+        ...state.editHistoryPast,
+        buildEditHistoryEntry(editingMatrix, state.editingOrigin),
+      ]),
+      editHistoryFuture: [],
+    })
+    return true
+  },
+
+  undoEdit() {
+    const state = get()
+    const { editingMatrix, editHistoryPast } = state
+    if (!editingMatrix || editHistoryPast.length === 0) return
+
+    const previous = editHistoryPast[editHistoryPast.length - 1]
+    set({
+      editingMatrix: structuredClone(previous.matrix),
+      editingGridSize: { cols: previous.matrix.width, rows: previous.matrix.height },
+      editingOrigin: previous.origin ? { ...previous.origin } : null,
+      editHistoryPast: editHistoryPast.slice(0, -1),
+      editHistoryFuture: trimHistoryEntries([
+        ...state.editHistoryFuture,
+        buildEditHistoryEntry(editingMatrix, state.editingOrigin),
+      ]),
+    })
+  },
+
+  redoEdit() {
+    const state = get()
+    const { editingMatrix, editHistoryFuture } = state
+    if (!editingMatrix || editHistoryFuture.length === 0) return
+
+    const next = editHistoryFuture[editHistoryFuture.length - 1]
+    set({
+      editingMatrix: structuredClone(next.matrix),
+      editingGridSize: { cols: next.matrix.width, rows: next.matrix.height },
+      editingOrigin: next.origin ? { ...next.origin } : null,
+      editHistoryPast: trimHistoryEntries([
+        ...state.editHistoryPast,
+        buildEditHistoryEntry(editingMatrix, state.editingOrigin),
+      ]),
+      editHistoryFuture: editHistoryFuture.slice(0, -1).map(cloneEditHistoryEntry),
     })
   },
 }), {

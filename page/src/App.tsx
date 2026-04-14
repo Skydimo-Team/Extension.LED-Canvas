@@ -360,9 +360,25 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isEditableTarget(event.target)) return
-      if (useCanvasStore.getState().editingDeviceId) return
-
+      const state = useCanvasStore.getState()
       const isModifierPressed = event.ctrlKey || event.metaKey
+      if (state.editingDeviceId) {
+        if (!isModifierPressed || event.altKey) return
+
+        const key = event.key.toLowerCase()
+        if (!event.shiftKey && key === 'z') {
+          state.undoEdit()
+          event.preventDefault()
+          return
+        }
+
+        if ((event.shiftKey && key === 'z') || key === 'y') {
+          state.redoEdit()
+          event.preventDefault()
+        }
+        return
+      }
+
       if (!isModifierPressed || event.altKey) return
 
       const key = event.key.toLowerCase()
