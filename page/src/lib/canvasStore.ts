@@ -209,6 +209,10 @@ function makeKey(deviceId: string, outputId: string, segmentId?: string) {
   return `${deviceId}::${outputId}::${segmentId ?? ''}`
 }
 
+function serializeLayoutForComparison(matrix: Matrix | null | undefined): string {
+  return JSON.stringify(matrix ?? null)
+}
+
 export function computeMismatchFlags(
   placed: PlacedDevice,
   liveLedsCount: number,
@@ -218,8 +222,9 @@ export function computeMismatchFlags(
   const ledCountMismatch = liveLedsCount !== snapshotCount
 
   let layoutMismatch = false
-  if (!ledCountMismatch && placed.snapshot?.matrix && liveMatrix) {
-    layoutMismatch = JSON.stringify(placed.snapshot.matrix) !== JSON.stringify(liveMatrix)
+  if (!ledCountMismatch) {
+    const snapshotMatrix = placed.snapshot?.matrix ?? null
+    layoutMismatch = serializeLayoutForComparison(snapshotMatrix) !== serializeLayoutForComparison(liveMatrix)
   }
 
   return { ledCountMismatch, layoutMismatch }

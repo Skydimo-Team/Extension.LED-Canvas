@@ -7,7 +7,7 @@ import {
   Minus,
   Sun,
   TriangleAlert,
-  LayoutGrid,
+  UserRoundPen,
   Search,
 } from 'lucide-react'
 import { ScrollArea, Slider } from 'radix-ui'
@@ -188,7 +188,7 @@ function LeafItem({
         )}
         {!ledCountMismatch && layoutMismatch && (
           <span className="shrink-0 mr-1" title={t('device.layoutMismatch')}>
-            <LayoutGrid className="size-3 text-blue-400" />
+            <UserRoundPen className="size-3 text-blue-400" />
           </span>
         )}
         {!ledCountMismatch && !layoutMismatch && stale && (
