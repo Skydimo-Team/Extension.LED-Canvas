@@ -91,7 +91,7 @@ interface CanvasState {
   toggleSnapToGrid: () => void
   setSelectedId: (id: string | null) => void
 
-  enterEditMode: (deviceId: string) => void
+  enterEditMode: (deviceId: string, liveLedsCount?: number) => void
   exitEditMode: (confirm: boolean) => void
   moveLed: (ledIndex: number, toCol: number, toRow: number) => void
 
@@ -186,17 +186,23 @@ function mirrorMatrixHorizontally(matrix: Matrix | null, ledsCount: number): Mat
   }
 }
 
-function hasMissingSnapshotLeds(device: Pick<PlacedDevice, 'stale' | 'snapshot' | 'ledsCount'>) {
+function hasMissingSnapshotLeds(
+  device: Pick<PlacedDevice, 'stale' | 'snapshot' | 'ledsCount'>,
+  liveLedsCount: number,
+) {
   return device.stale
     && device.snapshot != null
     && typeof device.snapshot.ledsCount === 'number'
-    && device.snapshot.ledsCount > device.ledsCount
+    && device.snapshot.ledsCount > liveLedsCount
 }
 
-function buildEditModeSource(device: PlacedDevice): { matrix: Matrix | null; availableLedCount: number } {
-  const availableLedCount = Math.max(0, Math.floor(device.ledsCount))
+function buildEditModeSource(
+  device: PlacedDevice,
+  liveLedsCount = device.ledsCount,
+): { matrix: Matrix | null; availableLedCount: number } {
+  const availableLedCount = Math.max(0, Math.floor(liveLedsCount))
 
-  if (hasMissingSnapshotLeds(device)) {
+  if (hasMissingSnapshotLeds(device, liveLedsCount)) {
     const snapshotLedCount = device.snapshot?.ledsCount ?? 0
     return {
       matrix: device.snapshot?.matrix ?? buildSequentialMatrix(snapshotLedCount),
@@ -560,12 +566,12 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
     set({ selectedId: id })
   },
 
-  enterEditMode(deviceId) {
+  enterEditMode(deviceId, liveLedsCount) {
     const state = get()
     const dev = state.placedDevices.find(d => d.id === deviceId)
     if (!dev || state.editingDeviceId) return
 
-    const { matrix: source, availableLedCount } = buildEditModeSource(dev)
+    const { matrix: source, availableLedCount } = buildEditModeSource(dev, liveLedsCount)
     if (!source) return
 
     const editingMatrix = structuredClone(source)

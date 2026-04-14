@@ -1,10 +1,10 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Stage, Layer, Shape, Group, Rect, Circle, Line, Text } from 'react-konva'
 import type Konva from 'konva'
-import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch } from '@/lib/canvasStore'
+import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch, computeMismatchFlags } from '@/lib/canvasStore'
 import { useBridgeStore } from '@/lib/bridge'
 import type { PlacedDevice } from '@/lib/canvasStore'
-import type { LedColor } from '@/types'
+import type { LedColor, Matrix, TreeDevice } from '@/types'
 import { t } from '@/lib/i18n'
 
 /* ── Default canvas bounds ── */
@@ -49,6 +49,8 @@ function readCanvasColors() {
     deviceFill: s.getPropertyValue('--device-fill').trim() || 'rgba(100,149,237,0.08)',
     deviceStroke: s.getPropertyValue('--device-stroke').trim() || 'rgba(100,149,237,0.4)',
     deviceSelectedStroke: s.getPropertyValue('--device-selected-stroke').trim() || 'rgba(100,149,237,0.8)',
+    deviceLayoutFill: s.getPropertyValue('--device-layout-fill').trim() || 'rgba(100,149,237,0.12)',
+    deviceLayoutStroke: s.getPropertyValue('--device-layout-stroke').trim() || 'rgba(100,149,237,0.58)',
     deviceStaleFill: s.getPropertyValue('--device-stale-fill').trim() || 'rgba(245,158,11,0.08)',
     deviceStaleStroke: s.getPropertyValue('--device-stale-stroke').trim() || 'rgba(245,158,11,0.5)',
     ledFill: s.getPropertyValue('--led-fill').trim() || 'rgba(90,195,120,0.5)',
@@ -92,6 +94,39 @@ function devicePreviewFill(color: LedColor) {
 
 function devicePreviewStroke(color: LedColor) {
   return `rgba(${mixChannel(color.r, 0, 0.28)}, ${mixChannel(color.g, 0, 0.28)}, ${mixChannel(color.b, 0, 0.28)}, 0.98)`
+}
+
+interface LivePlacementInfo {
+  ledsCount: number
+  matrix: Matrix | null
+}
+
+type PlacementWarningState = 'none' | 'layout' | 'stale'
+
+function makeLivePlacementKey(deviceId: string, outputId: string, segmentId?: string) {
+  return `${deviceId}::${outputId}::${segmentId ?? ''}`
+}
+
+function buildLivePlacementLookup(devices: TreeDevice[]) {
+  const lookup = new Map<string, LivePlacementInfo>()
+
+  for (const device of devices) {
+    for (const output of device.outputs) {
+      lookup.set(makeLivePlacementKey(device.id, output.id), {
+        ledsCount: output.leds_count ?? 0,
+        matrix: output.matrix ?? null,
+      })
+
+      for (const segment of output.segments) {
+        lookup.set(makeLivePlacementKey(device.id, output.id, segment.id), {
+          ledsCount: segment.leds_count ?? 0,
+          matrix: segment.matrix ?? null,
+        })
+      }
+    }
+  }
+
+  return lookup
 }
 
 /* ── Compute LED positions within a device block (relative to top-left) ── */
@@ -152,23 +187,25 @@ interface LedRenderInfo {
  * gaps consistently.  This avoids the stretching issue where active LEDs would
  * expand to fill the full block width and overlap the ghosts.
  */
-function computeAllLeds(dev: PlacedDevice): LedRenderInfo[] {
-  const { width, height, ledsCount, matrix, snapshot, stale } = dev
+function computeAllLeds(dev: PlacedDevice, livePlacement?: LivePlacementInfo): LedRenderInfo[] {
+  const { width, height, ledsCount, matrix, snapshot } = dev
+  const liveLedsCount = livePlacement?.ledsCount ?? ledsCount
+  const liveMatrix = livePlacement?.matrix ?? matrix
   if (ledsCount <= 0 && (!snapshot || !snapshot.ledsCount)) return []
 
   // When stale with fewer LEDs than the snapshot, use snapshot dimensions.
-  const hasFewerLeds = stale && snapshot != null
+  const hasFewerLeds = snapshot != null
     && typeof snapshot.ledsCount === 'number'
-    && snapshot.ledsCount > ledsCount
+    && snapshot.ledsCount > liveLedsCount
 
   // Build a set of currently-active LED indices from the live device.
   const activeLedIndices = new Set<number>()
-  if (matrix && matrix.width > 0 && matrix.height > 0) {
-    for (const v of matrix.map) {
+  if (liveMatrix && liveMatrix.width > 0 && liveMatrix.height > 0) {
+    for (const v of liveMatrix.map) {
       if (v >= 0) activeLedIndices.add(v)
     }
   } else {
-    for (let i = 0; i < ledsCount; i++) activeLedIndices.add(i)
+    for (let i = 0; i < liveLedsCount; i++) activeLedIndices.add(i)
   }
 
   // Choose which grid dimensions to use for cell layout.
@@ -316,6 +353,7 @@ export function VisualGrid() {
   const updateCanvasBounds = useCanvasStore(s => s.updateCanvasBounds)
   const previewByLayoutId = useBridgeStore(s => s.previewByLayoutId)
   const activeLayoutId = useBridgeStore(s => s.activeLayoutId)
+  const liveDevices = useBridgeStore(s => s.devices)
 
   /* edit mode state */
   const editingDeviceId = useCanvasStore(s => s.editingDeviceId)
@@ -349,6 +387,38 @@ export function VisualGrid() {
 
   const activeLayoutPreview = activeLayoutId ? previewByLayoutId[activeLayoutId] : undefined
   const canvasPreviewColors = activeLayoutPreview?.canvas ?? EMPTY_LED_COLORS
+
+  const livePlacementLookup = useMemo(() => buildLivePlacementLookup(liveDevices), [liveDevices])
+  const placementWarningById = useMemo(() => {
+    const warningById = new Map<string, PlacementWarningState>()
+
+    for (const placed of placedDevices) {
+      const livePlacement = livePlacementLookup.get(
+        makeLivePlacementKey(placed.deviceId, placed.outputId, placed.segmentId),
+      )
+
+      if (!livePlacement) {
+        warningById.set(placed.id, placed.stale ? 'stale' : 'none')
+        continue
+      }
+
+      const { ledCountMismatch, layoutMismatch } = computeMismatchFlags(
+        placed,
+        livePlacement.ledsCount,
+        livePlacement.matrix,
+      )
+
+      if (ledCountMismatch || placed.stale) {
+        warningById.set(placed.id, 'stale')
+      } else if (layoutMismatch) {
+        warningById.set(placed.id, 'layout')
+      } else {
+        warningById.set(placed.id, 'none')
+      }
+    }
+
+    return warningById
+  }, [placedDevices, livePlacementLookup])
 
   /* cache colors (re-read on theme change) */
   const [colors, setColors] = useState(readCanvasColors)
@@ -901,9 +971,22 @@ export function VisualGrid() {
               const isBeingEdited = editingDeviceId === dev.id
               const isDimmed = isEditMode && !isBeingEdited
               const isSelected = selectedId === dev.id
-              const allLeds = isBeingEdited ? [] : computeAllLeds(dev)
+              const livePlacement = livePlacementLookup.get(
+                makeLivePlacementKey(dev.deviceId, dev.outputId, dev.segmentId),
+              )
+              const allLeds = isBeingEdited ? [] : computeAllLeds(dev, livePlacement)
               const blocked = new Set(dev.blockedLedIndices)
-              const isStale = dev.stale
+              const warningState = placementWarningById.get(dev.id) ?? (dev.stale ? 'stale' : 'none')
+              const fill = warningState === 'layout'
+                ? c.deviceLayoutFill
+                : warningState === 'stale'
+                  ? c.deviceStaleFill
+                  : c.deviceFill
+              const stroke = warningState === 'layout'
+                ? c.deviceLayoutStroke
+                : warningState === 'stale'
+                  ? c.deviceStaleStroke
+                  : c.deviceStroke
               const rotation = dev.rotation ?? 0
               const placementColors = activeLayoutPreview?.placementsById[dev.id]
 
@@ -984,19 +1067,19 @@ export function VisualGrid() {
                   }}
                   onDblClick={(e) => {
                     e.cancelBubble = true
-                    if (!isEditMode) enterEditMode(dev.id)
+                    if (!isEditMode) enterEditMode(dev.id, livePlacement?.ledsCount)
                   }}
                   onDblTap={(e) => {
                     e.cancelBubble = true
-                    if (!isEditMode) enterEditMode(dev.id)
+                    if (!isEditMode) enterEditMode(dev.id, livePlacement?.ledsCount)
                   }}
                 >
                   {/* Background rect */}
                   <Rect
                     width={renderWidth}
                     height={renderHeight}
-                    fill={isStale ? c.deviceStaleFill : c.deviceFill}
-                    stroke={isSelected ? c.deviceSelectedStroke : (isStale ? c.deviceStaleStroke : c.deviceStroke)}
+                    fill={fill}
+                    stroke={isSelected ? c.deviceSelectedStroke : stroke}
                     strokeWidth={(isSelected ? 2 : 1) / stageScale}
                   />
 
@@ -1335,31 +1418,6 @@ export function VisualGrid() {
                       )}
                     </Group>
                   ))}
-
-                  {/* Stale warning badge (top-right corner) */}
-                  {!isBeingEdited && isStale && (
-                    <Shape
-                      listening={false}
-                      sceneFunc={(ctx) => {
-                        const canvas = ctx._context as CanvasRenderingContext2D
-                        const badgeR = Math.max(0.3, 4 / stageScale)
-                        const cx = dev.width - badgeR * 0.5
-                        const cy = badgeR * 0.5
-
-                        canvas.beginPath()
-                        canvas.arc(cx, cy, badgeR, 0, Math.PI * 2)
-                        canvas.fillStyle = c.staleWarning
-                        canvas.fill()
-
-                        const fontSize = badgeR * 1.3
-                        canvas.fillStyle = c.ledLockIcon
-                        canvas.font = `bold ${fontSize}px sans-serif`
-                        canvas.textAlign = 'center'
-                        canvas.textBaseline = 'middle'
-                        canvas.fillText('!', cx, cy + fontSize * 0.04)
-                      }}
-                    />
-                  )}
 
                   {/* Resize handles — only when selected and NOT in edit mode */}
                   {isSelected && !isEditMode && ([

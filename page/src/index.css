@@ -14,6 +14,8 @@
   --device-fill: rgba(0, 103, 192, 0.08);
   --device-stroke: rgba(0, 103, 192, 0.34);
   --device-selected-stroke: rgba(0, 103, 192, 0.78);
+  --device-layout-fill: rgba(0, 103, 192, 0.14);
+  --device-layout-stroke: rgba(0, 103, 192, 0.62);
   --led-fill: rgba(16, 124, 16, 0.42);
   --led-stroke: rgba(16, 124, 16, 0.78);
   --led-off-fill: rgba(15, 23, 42, 0.10);
@@ -133,6 +135,8 @@ h1 {
     --device-fill: rgba(96, 205, 255, 0.12);
     --device-stroke: rgba(96, 205, 255, 0.44);
     --device-selected-stroke: rgba(96, 205, 255, 0.84);
+    --device-layout-fill: rgba(96, 205, 255, 0.18);
+    --device-layout-stroke: rgba(96, 205, 255, 0.68);
     --led-fill: rgba(114, 207, 170, 0.46);
     --led-stroke: rgba(114, 207, 170, 0.82);
     --led-off-fill: rgba(255, 255, 255, 0.12);
