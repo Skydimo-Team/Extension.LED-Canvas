@@ -102,9 +102,10 @@ interface CanvasState {
 
 type CanvasHistoryState = Pick<CanvasState, 'placedDevices' | 'canvasBounds' | 'snapToGrid'>
 
-let nextId = 1
 const MIN_CANVAS_SIDE = 1
 const TEMPORAL_LIMIT = 50
+const PLACEMENT_ID_LENGTH = 9
+const PLACEMENT_ID_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const DEFAULT_CANVAS_BOUNDS: CanvasBounds = {
   x: 0,
   y: 0,
@@ -114,6 +115,30 @@ const DEFAULT_CANVAS_BOUNDS: CanvasBounds = {
 
 let historyBatchDepth = 0
 let historyBatchStart: CanvasHistoryState | null = null
+
+function createPlacementId(existingIds: ReadonlySet<string>) {
+  const cryptoApi = globalThis.crypto
+
+  while (true) {
+    const chars = new Array<string>(PLACEMENT_ID_LENGTH)
+
+    if (cryptoApi?.getRandomValues) {
+      const bytes = cryptoApi.getRandomValues(new Uint8Array(PLACEMENT_ID_LENGTH))
+      for (let index = 0; index < PLACEMENT_ID_LENGTH; index += 1) {
+        chars[index] = PLACEMENT_ID_CHARS[bytes[index] % PLACEMENT_ID_CHARS.length]
+      }
+    } else {
+      for (let index = 0; index < PLACEMENT_ID_LENGTH; index += 1) {
+        chars[index] = PLACEMENT_ID_CHARS[Math.floor(Math.random() * PLACEMENT_ID_CHARS.length)]
+      }
+    }
+
+    const id = chars.join('')
+    if (!existingIds.has(id)) {
+      return id
+    }
+  }
+}
 
 function computeDefaultSize(ledsCount: number, matrix: Matrix | null): { width: number; height: number } {
   if (matrix && matrix.width > 0 && matrix.height > 0) {
@@ -337,8 +362,9 @@ function placementToDevice(p: any, canvasBounds: CanvasBounds): PlacedDevice {
   const h = p.height ?? 1
   const deviceId = p.deviceId ?? ''
   const port = p.port ?? ''
+  const fallbackIds = new Set<string>()
   return {
-    id: p.id ?? `pd-${nextId++}`,
+    id: typeof p.id === 'string' && p.id ? p.id : createPlacementId(fallbackIds),
     deviceId,
     outputId: p.outputId ?? '',
     segmentId: p.segmentId,
@@ -413,6 +439,8 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
     const key = makeKey(info.deviceId, info.outputId, info.segmentId)
     if (state.placedDevices.some(d => makeKey(d.deviceId, d.outputId, d.segmentId) === key)) return
 
+    const existingIds = new Set(state.placedDevices.map(device => device.id))
+
     const size = computeDefaultSize(info.ledsCount, info.matrix)
 
     // Place next to existing devices, or at canvas origin + 1
@@ -434,7 +462,7 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
       placedDevices: [
         ...state.placedDevices,
         {
-          id: `pd-${nextId++}`,
+          id: createPlacementId(existingIds),
           deviceId: info.deviceId,
           outputId: info.outputId,
           segmentId: info.segmentId,
