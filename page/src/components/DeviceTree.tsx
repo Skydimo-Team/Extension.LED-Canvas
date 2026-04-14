@@ -7,13 +7,23 @@ import {
   Minus,
   Sun,
   TriangleAlert,
+  LayoutGrid,
   Search,
 } from 'lucide-react'
 import { ScrollArea, Slider } from 'radix-ui'
 import { useBridgeStore } from '@/lib/bridge'
-import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch } from '@/lib/canvasStore'
+import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch, computeMismatchFlags } from '@/lib/canvasStore'
 import type { PlacedDevice } from '@/lib/canvasStore'
 import type { PlacementSnapshot, Segment, TreeDevice } from '@/types'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { t, useLocale } from '@/lib/i18n'
 
@@ -121,6 +131,8 @@ function LeafItem({
   placedDevice,
   selectedId,
   stale,
+  ledCountMismatch,
+  layoutMismatch,
   onSelect,
   onToggle,
 }: {
@@ -129,15 +141,14 @@ function LeafItem({
   placedDevice: PlacedDevice | undefined
   selectedId: string | null
   stale: boolean
+  ledCountMismatch: boolean
+  layoutMismatch: boolean
   onSelect: () => void
   onToggle: (e: React.MouseEvent<HTMLButtonElement>) => void
 }) {
   const placed = !!placedDevice
   const selected = placed && placedDevice.id === selectedId
-
-  const cachedPlacementRef = useRef<PlacedDevice | undefined>(undefined)
-  if (placedDevice) cachedPlacementRef.current = placedDevice
-  const renderPlacement = placedDevice ?? cachedPlacementRef.current
+  const renderPlacement = placedDevice
 
   return (
     <div
@@ -170,7 +181,17 @@ function LeafItem({
         onClick={onSelect}
       >
         <span className="truncate flex-1">{name}</span>
-        {stale && (
+        {ledCountMismatch && (
+          <span className="shrink-0 mr-1" title={t('device.ledCountMismatch')}>
+            <TriangleAlert className="size-3 text-amber-500" />
+          </span>
+        )}
+        {!ledCountMismatch && layoutMismatch && (
+          <span className="shrink-0 mr-1" title={t('device.layoutMismatch')}>
+            <LayoutGrid className="size-3 text-blue-400" />
+          </span>
+        )}
+        {!ledCountMismatch && !layoutMismatch && stale && (
           <span className="shrink-0 mr-1" title={STALE_TOOLTIP()}>
             <TriangleAlert className="size-3 text-amber-500" />
           </span>
@@ -222,11 +243,13 @@ function SegmentNode({
   deviceId,
   outputId,
   port,
+  onRequestRemove,
 }: {
   segment: Segment
   deviceId: string
   outputId: string
   port: string
+  onRequestRemove: (id: string, name: string) => void
 }) {
   const addDevice = useCanvasStore(s => s.addDevice)
   const removeDevice = useCanvasStore(s => s.removeDevice)
@@ -240,6 +263,12 @@ function SegmentNode({
   )
   const stale = placedDevice?.stale ?? false
 
+  const liveLedsCount = segment.leds_count ?? 0
+  const liveMatrix = segment.matrix ?? null
+  const { ledCountMismatch, layoutMismatch } = placedDevice
+    ? computeMismatchFlags(placedDevice, liveLedsCount, liveMatrix)
+    : { ledCountMismatch: false, layoutMismatch: false }
+
   const handleSelect = () => {
     if (!placedDevice) return
     const selected = placedDevice.id === selectedId
@@ -249,6 +278,10 @@ function SegmentNode({
   const handleToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     if (placedDevice) {
+      if (placedDevice.snapshot?.customMatrix) {
+        onRequestRemove(placedDevice.id, name)
+        return
+      }
       removeDevice(placedDevice.id)
       return
     }
@@ -258,9 +291,9 @@ function SegmentNode({
       segmentId: segment.id,
       port,
       name,
-      ledsCount: segment.leds_count ?? 0,
-      matrix: segment.matrix ?? null,
-      snapshot: { ledsCount: segment.leds_count ?? 0, matrix: segment.matrix ?? null, name } satisfies PlacementSnapshot,
+      ledsCount: liveLedsCount,
+      matrix: liveMatrix,
+      snapshot: { ledsCount: liveLedsCount, matrix: liveMatrix, name } satisfies PlacementSnapshot,
     })
   }
 
@@ -271,6 +304,8 @@ function SegmentNode({
       placedDevice={placedDevice}
       selectedId={selectedId}
       stale={stale}
+      ledCountMismatch={ledCountMismatch}
+      layoutMismatch={layoutMismatch}
       onSelect={handleSelect}
       onToggle={handleToggle}
     />
@@ -282,10 +317,12 @@ function OutputNode({
   output,
   deviceId,
   port,
+  onRequestRemove,
 }: {
   output: TreeOutput
   deviceId: string
   port: string
+  onRequestRemove: (id: string, name: string) => void
 }) {
   const [open, setOpen] = useState(true)
   const addDevice = useCanvasStore(s => s.addDevice)
@@ -305,6 +342,12 @@ function OutputNode({
   })
   const staleLeaf = placedDevice?.stale ?? false
 
+  const liveLedsCount = output.leds_count ?? 0
+  const liveMatrix = output.matrix ?? null
+  const { ledCountMismatch, layoutMismatch } = (isLeaf && placedDevice)
+    ? computeMismatchFlags(placedDevice, liveLedsCount, liveMatrix)
+    : { ledCountMismatch: false, layoutMismatch: false }
+
   const handleSelect = () => {
     if (hasChildren) {
       setOpen(o => !o)
@@ -318,6 +361,10 @@ function OutputNode({
   const handleToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     if (placedDevice) {
+      if (placedDevice.snapshot?.customMatrix) {
+        onRequestRemove(placedDevice.id, name)
+        return
+      }
       removeDevice(placedDevice.id)
       return
     }
@@ -326,9 +373,9 @@ function OutputNode({
       outputId: output.id,
       port,
       name,
-      ledsCount: output.leds_count ?? 0,
-      matrix: output.matrix ?? null,
-      snapshot: { ledsCount: output.leds_count ?? 0, matrix: output.matrix ?? null, name } satisfies PlacementSnapshot,
+      ledsCount: liveLedsCount,
+      matrix: liveMatrix,
+      snapshot: { ledsCount: liveLedsCount, matrix: liveMatrix, name } satisfies PlacementSnapshot,
     })
   }
 
@@ -340,6 +387,8 @@ function OutputNode({
         placedDevice={placedDevice}
         selectedId={selectedId}
         stale={staleLeaf}
+        ledCountMismatch={ledCountMismatch}
+        layoutMismatch={layoutMismatch}
         onSelect={handleSelect}
         onToggle={handleToggle}
       />
@@ -375,6 +424,7 @@ function OutputNode({
               deviceId={deviceId}
               outputId={output.id}
               port={port}
+              onRequestRemove={onRequestRemove}
             />
           ))}
         </div>
@@ -384,7 +434,7 @@ function OutputNode({
 }
 
 /* ── Device node ── */
-function DeviceNode({ device, isLast }: { device: TreeDevice; isLast: boolean }) {
+function DeviceNode({ device, isLast, onRequestRemove }: { device: TreeDevice; isLast: boolean; onRequestRemove: (id: string, name: string) => void }) {
   const [open, setOpen] = useState(true)
   const name = device.name || device.nickname || device.model || device.description || device.id || '(unknown)'
   const outputs = device.outputs
@@ -427,6 +477,7 @@ function DeviceNode({ device, isLast }: { device: TreeDevice; isLast: boolean })
                 output={out}
                 deviceId={device.id}
                 port={device.port ?? device.id}
+                onRequestRemove={onRequestRemove}
               />
             ))}
           </div>
@@ -438,9 +489,11 @@ function DeviceNode({ device, isLast }: { device: TreeDevice; isLast: boolean })
 
 /* ── Main panel ── */
 export function DeviceTree() {
-  useLocale() // subscribe to locale changes for re-render
+  useLocale()
   const { status, devices, connect, requestDevices } = useBridgeStore()
+  const removeDevice = useCanvasStore(s => s.removeDevice)
   const [filter, setFilter] = useState('')
+  const [pendingRemoval, setPendingRemoval] = useState<{ id: string; name: string } | null>(null)
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -454,6 +507,17 @@ export function DeviceTree() {
   useEffect(() => { connect() }, [connect])
 
   const handleRefresh = useCallback(() => { requestDevices() }, [requestDevices])
+
+  const handleRequestRemove = useCallback((id: string, name: string) => {
+    setPendingRemoval({ id, name })
+  }, [])
+
+  const handleConfirmRemove = useCallback(() => {
+    if (pendingRemoval) {
+      removeDevice(pendingRemoval.id)
+      setPendingRemoval(null)
+    }
+  }, [pendingRemoval, removeDevice])
 
   const showSearch = devices.length > 3
 
@@ -514,7 +578,7 @@ export function DeviceTree() {
               </div>
             ) : (
               filtered.map((dev, i) => (
-                <DeviceNode key={dev.id ?? i} device={dev} isLast={i === filtered.length - 1} />
+                <DeviceNode key={dev.id ?? i} device={dev} isLast={i === filtered.length - 1} onRequestRemove={handleRequestRemove} />
               ))
             )}
           </div>
@@ -526,6 +590,24 @@ export function DeviceTree() {
           <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/10 hover:bg-foreground/20 transition-colors" />
         </ScrollArea.Scrollbar>
       </ScrollArea.Root>
+
+      {/* Removal confirmation dialog for custom layouts */}
+      <Dialog open={!!pendingRemoval} onOpenChange={open => { if (!open) setPendingRemoval(null) }}>
+        <DialogContent showCloseButton={false} className="max-w-[340px]">
+          <DialogHeader>
+            <DialogTitle className="text-[14px]">{t('device.confirmRemoveTitle')}</DialogTitle>
+            <DialogDescription className="text-[12px]">{t('device.confirmRemoveCustom')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPendingRemoval(null)}>
+              {t('device.confirmRemoveNo')}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleConfirmRemove}>
+              {t('device.confirmRemoveYes')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

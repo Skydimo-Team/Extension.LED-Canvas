@@ -5,6 +5,7 @@ import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch } from '
 import { useBridgeStore } from '@/lib/bridge'
 import type { PlacedDevice } from '@/lib/canvasStore'
 import type { LedColor } from '@/types'
+import { t } from '@/lib/i18n'
 
 /* ── Default canvas bounds ── */
 const DEFAULT_CANVAS_W = 64
@@ -65,6 +66,11 @@ function readCanvasColors() {
     rotateHandleStroke: s.getPropertyValue('--rotate-handle-stroke').trim() || 'rgba(255,255,255,0.9)',
     rotateGuide: s.getPropertyValue('--rotate-guide').trim() || 'rgba(14,165,233,0.35)',
     staleWarning: s.getPropertyValue('--stale-warning').trim() || 'rgba(245,158,11,0.9)',
+    editGridLine: s.getPropertyValue('--edit-grid-line').trim() || 'rgba(100,149,237,0.2)',
+    editGridExtent: s.getPropertyValue('--edit-grid-extent').trim() || 'rgba(100,149,237,0.06)',
+    editConfirmFill: s.getPropertyValue('--edit-confirm-fill').trim() || 'rgba(34,197,94,0.9)',
+    editCancelFill: s.getPropertyValue('--edit-cancel-fill').trim() || 'rgba(239,68,68,0.85)',
+    editLedDrag: s.getPropertyValue('--edit-led-drag').trim() || 'rgba(100,149,237,0.6)',
   }
 }
 
@@ -271,11 +277,34 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
+function getEditPreviewMetrics(
+  dev: PlacedDevice,
+  editingMatrix: { width: number; height: number },
+  referenceMatrix: { width: number; height: number },
+  editingOrigin: { col: number; row: number } | null,
+) {
+  const baseCols = Math.max(1, referenceMatrix.width)
+  const baseRows = Math.max(1, referenceMatrix.height)
+  const cellW = dev.width / baseCols
+  const cellH = dev.height / baseRows
+  const origin = editingOrigin ?? { col: 0, row: 0 }
+
+  return {
+    x: dev.x + origin.col * cellW,
+    y: dev.y + origin.row * cellH,
+    width: Math.max(cellW, editingMatrix.width * cellW),
+    height: Math.max(cellH, editingMatrix.height * cellH),
+    cellW,
+    cellH,
+  }
+}
+
 export function VisualGrid() {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [stageScale, setStageScale] = useState(1)
+  const [draggingLedKey, setDraggingLedKey] = useState<string | null>(null)
 
   /* store state */
   const placedDevices = useCanvasStore(s => s.placedDevices)
@@ -287,6 +316,23 @@ export function VisualGrid() {
   const updateCanvasBounds = useCanvasStore(s => s.updateCanvasBounds)
   const previewByLayoutId = useBridgeStore(s => s.previewByLayoutId)
   const activeLayoutId = useBridgeStore(s => s.activeLayoutId)
+
+  /* edit mode state */
+  const editingDeviceId = useCanvasStore(s => s.editingDeviceId)
+  const editingMatrix = useCanvasStore(s => s.editingMatrix)
+  const editingAvailableLedCount = useCanvasStore(s => s.editingAvailableLedCount)
+  const preEditMatrix = useCanvasStore(s => s.preEditMatrix)
+  const editingOrigin = useCanvasStore(s => s.editingOrigin)
+  const enterEditMode = useCanvasStore(s => s.enterEditMode)
+  const exitEditMode = useCanvasStore(s => s.exitEditMode)
+  const moveLed = useCanvasStore(s => s.moveLed)
+  const isEditMode = editingDeviceId !== null
+
+  useEffect(() => {
+    if (!isEditMode) {
+      setDraggingLedKey(null)
+    }
+  }, [isEditMode])
 
   const canvasRect = {
     x: isFiniteNumber(canvasBounds.x) ? canvasBounds.x : 0,
@@ -756,16 +802,18 @@ export function VisualGrid() {
 
   /* ── Click empty space to deselect ── */
   const handleStageClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (isEditMode) return
     if (e.target === stageRef.current) {
       setSelectedId(null)
     }
-  }, [setSelectedId])
+  }, [isEditMode, setSelectedId])
 
   const handleStageTap = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
+    if (isEditMode) return
     if (e.target === stageRef.current) {
       setSelectedId(null)
     }
-  }, [setSelectedId])
+  }, [isEditMode, setSelectedId])
 
   /* ── Keyboard: Delete/Escape ── */
   useEffect(() => {
@@ -776,15 +824,22 @@ export function VisualGrid() {
     el.style.outline = 'none'
 
     function handleKey(e: KeyboardEvent) {
+      const state = useCanvasStore.getState()
+      if (state.editingDeviceId) {
+        if (e.key === 'Escape') {
+          state.exitEditMode(false)
+          e.preventDefault()
+        }
+        return
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        const sel = useCanvasStore.getState().selectedId
-        if (sel) {
-          useCanvasStore.getState().removeDevice(sel)
+        if (state.selectedId) {
+          state.removeDevice(state.selectedId)
           e.preventDefault()
         }
       }
       if (e.key === 'Escape') {
-        useCanvasStore.getState().setSelectedId(null)
+        state.setSelectedId(null)
       }
     }
 
@@ -816,15 +871,17 @@ export function VisualGrid() {
           ref={stageRef}
           width={size.width}
           height={size.height}
-          draggable
+          draggable={!isEditMode}
           onWheel={handleWheel}
           onClick={handleStageClick}
           onTap={handleStageTap}
         >
           {/* Grid background layer (non-interactive) */}
-          <Layer listening={false}>
-            <Shape sceneFunc={drawGrid} />
-          </Layer>
+          {!isEditMode && (
+            <Layer listening={false}>
+              <Shape sceneFunc={drawGrid} />
+            </Layer>
+          )}
 
           {/* Content layer – device blocks */}
           <Layer>
@@ -836,55 +893,349 @@ export function VisualGrid() {
               fill={c.canvasFill}
               listening={false}
             />
-            {canvasPreviewColors.length > 0 && (
+            {!isEditMode && canvasPreviewColors.length > 0 && (
               <Shape listening={false} sceneFunc={drawCanvasPreview} />
             )}
 
             {placedDevices.map(dev => {
+              const isBeingEdited = editingDeviceId === dev.id
+              const isDimmed = isEditMode && !isBeingEdited
               const isSelected = selectedId === dev.id
-              const allLeds = computeAllLeds(dev)
+              const allLeds = isBeingEdited ? [] : computeAllLeds(dev)
               const blocked = new Set(dev.blockedLedIndices)
               const isStale = dev.stale
               const rotation = dev.rotation ?? 0
               const placementColors = activeLayoutPreview?.placementsById[dev.id]
 
-              /* Rotation pivot is the center of the device bounding box. */
-              const offsetX = dev.width / 2
-              const offsetY = dev.height / 2
+              const editMetrics = isBeingEdited && editingMatrix && preEditMatrix
+                ? getEditPreviewMetrics(dev, editingMatrix, preEditMatrix, editingOrigin)
+                : null
+              const renderX = editMetrics?.x ?? dev.x
+              const renderY = editMetrics?.y ?? dev.y
+              const renderWidth = editMetrics?.width ?? dev.width
+              const renderHeight = editMetrics?.height ?? dev.height
+              const offsetX = renderWidth / 2
+              const offsetY = renderHeight / 2
+
+              /* ── Edit mode: use editing matrix for LED positions ── */
+              const editGrid = isBeingEdited && editingMatrix && editMetrics
+                ? { cols: editingMatrix.width, rows: editingMatrix.height, cellW: editMetrics.cellW, cellH: editMetrics.cellH }
+                : null
+              const editMap = isBeingEdited && editingMatrix ? editingMatrix.map : null
+              const editCellMetrics = editGrid
+                ? (() => {
+                  const gapW = editGrid.cellW * LED_GAP_RATIO
+                  const gapH = editGrid.cellH * LED_GAP_RATIO
+                  const ledW = editGrid.cellW - gapW
+                  const ledH = editGrid.cellH - gapH
+
+                  return {
+                    ...editGrid,
+                    gapW,
+                    gapH,
+                    ledW,
+                    ledH,
+                    cr: Math.min(ledW, ledH) * LED_CORNER_RATIO,
+                  }
+                })()
+                : null
+              const editableLedCount = Math.max(0, isBeingEdited ? (editingAvailableLedCount ?? dev.ledsCount) : dev.ledsCount)
+              const editLedCells = editCellMetrics && editMap
+                ? (() => {
+                  const leds: Array<{ index: number; col: number; row: number; ghost: boolean }> = []
+                  for (let i = 0; i < editMap.length; i += 1) {
+                    const index = editMap[i]
+                    if (index >= 0) {
+                      leds.push({
+                        index,
+                        col: i % editCellMetrics.cols,
+                        row: Math.floor(i / editCellMetrics.cols),
+                        ghost: index >= editableLedCount,
+                      })
+                    }
+                  }
+                  return leds
+                })()
+                : null
+              const cancelLabel = t('editMode.cancel')
+              const confirmLabel = t('editMode.confirm')
 
               return (
                 <Group
                   key={dev.id}
-                  x={dev.x + offsetX}
-                  y={dev.y + offsetY}
+                  id={`edit-group-${dev.id}`}
+                  x={renderX + offsetX}
+                  y={renderY + offsetY}
                   offsetX={offsetX}
                   offsetY={offsetY}
                   rotation={rotation}
-                  draggable
+                  opacity={isDimmed ? 0.15 : 1}
+                  draggable={!isEditMode}
                   dragBoundFunc={makeDragBound(dev, snapToGrid)}
                   onDragStart={handleDeviceDragStart(dev.id)}
                   onDragEnd={handleDeviceDragEnd(dev.id)}
                   onClick={(e) => {
                     e.cancelBubble = true
-                    setSelectedId(dev.id)
+                    if (!isEditMode) setSelectedId(dev.id)
                   }}
                   onTap={(e) => {
                     e.cancelBubble = true
-                    setSelectedId(dev.id)
+                    if (!isEditMode) setSelectedId(dev.id)
+                  }}
+                  onDblClick={(e) => {
+                    e.cancelBubble = true
+                    if (!isEditMode) enterEditMode(dev.id)
+                  }}
+                  onDblTap={(e) => {
+                    e.cancelBubble = true
+                    if (!isEditMode) enterEditMode(dev.id)
                   }}
                 >
                   {/* Background rect */}
                   <Rect
-                    width={dev.width}
-                    height={dev.height}
+                    width={renderWidth}
+                    height={renderHeight}
                     fill={isStale ? c.deviceStaleFill : c.deviceFill}
                     stroke={isSelected ? c.deviceSelectedStroke : (isStale ? c.deviceStaleStroke : c.deviceStroke)}
                     strokeWidth={(isSelected ? 2 : 1) / stageScale}
                   />
 
-                  {/* LED rects (active + ghost in one pass) */}
-                  {allLeds.map((led, i) => led.ghost ? (
-                    /* Ghost LED — dashed border, no fill */
+                  {/* ── Edit mode: internal grid lines ── */}
+                  {editGrid && (
+                    <Shape
+                      listening={false}
+                      sceneFunc={(ctx) => {
+                        const canvas = ctx._context as CanvasRenderingContext2D
+                        const cols = editGrid.cols
+                        const rows = editGrid.rows
+                        const cellW = editGrid.cellW
+                        const cellH = editGrid.cellH
+
+                        canvas.save()
+
+                        canvas.strokeStyle = c.editGridLine
+                        canvas.lineWidth = Math.max(0.05, 0.5 / stageScale)
+                        canvas.beginPath()
+                        for (let col = 1; col < cols; col++) {
+                          canvas.moveTo(col * cellW, 0)
+                          canvas.lineTo(col * cellW, renderHeight)
+                        }
+                        for (let row = 1; row < rows; row++) {
+                          canvas.moveTo(0, row * cellH)
+                          canvas.lineTo(renderWidth, row * cellH)
+                        }
+                        canvas.stroke()
+
+                        canvas.restore()
+                      }}
+                    />
+                  )}
+
+                  {/* ── Edit mode: draggable LED rects ── */}
+                  {editCellMetrics && editLedCells?.map(led => led.ghost ? (
+                    <Shape
+                      key={`edit-ghost-${led.index}-${led.col}-${led.row}`}
+                      listening={false}
+                      sceneFunc={(ctx) => {
+                        const canvas = ctx._context as CanvasRenderingContext2D
+                        canvas.save()
+                        strokeDashedRoundRect(
+                          canvas,
+                          led.col * editCellMetrics.cellW + editCellMetrics.gapW / 2,
+                          led.row * editCellMetrics.cellH + editCellMetrics.gapH / 2,
+                          editCellMetrics.ledW,
+                          editCellMetrics.ledH,
+                          editCellMetrics.cr,
+                          Math.max(0.15, 2 / stageScale),
+                          c.ledGhostStroke,
+                          Math.max(0.08, 0.6 / stageScale),
+                        )
+                        canvas.restore()
+                      }}
+                    />
+                  ) : null)}
+
+                  {editCellMetrics && editLedCells?.map(led => {
+                    if (led.ghost) return null
+
+                    return (
+                      <Rect
+                        key={`edit-led-${led.index}`}
+                        _useStrictMode={draggingLedKey !== `${dev.id}:${led.index}`}
+                        x={led.col * editCellMetrics.cellW + editCellMetrics.gapW / 2}
+                        y={led.row * editCellMetrics.cellH + editCellMetrics.gapH / 2}
+                        width={editCellMetrics.ledW}
+                        height={editCellMetrics.ledH}
+                        cornerRadius={editCellMetrics.cr}
+                        fill={c.editLedDrag}
+                        stroke={c.deviceSelectedStroke}
+                        strokeWidth={Math.max(0.08, 0.8 / stageScale)}
+                        draggable
+                        onDragStart={(e) => {
+                          e.cancelBubble = true
+                          setDraggingLedKey(`${dev.id}:${led.index}`)
+                          updateCursor('grabbing')
+                        }}
+                        dragBoundFunc={(pos) => {
+                          const groupNode = stageRef.current?.findOne(`#edit-group-${dev.id}`)
+                          if (!groupNode) return pos
+
+                          const transform = groupNode.getAbsoluteTransform()
+                          const inv = transform.copy().invert()
+                          const local = inv.point(pos)
+                          const snappedCol = Math.round((local.x - editCellMetrics.gapW / 2) / editCellMetrics.cellW)
+                          const snappedRow = Math.round((local.y - editCellMetrics.gapH / 2) / editCellMetrics.cellH)
+
+                          const target = transform.point({
+                            x: snappedCol * editCellMetrics.cellW + editCellMetrics.gapW / 2,
+                            y: snappedRow * editCellMetrics.cellH + editCellMetrics.gapH / 2,
+                          })
+                          return target
+                        }}
+                        onDragEnd={(e) => {
+                          e.cancelBubble = true
+                          const node = e.target
+                          const groupNode = stageRef.current?.findOne(`#edit-group-${dev.id}`)
+                          if (!groupNode) {
+                            setDraggingLedKey(null)
+                            updateCursor('default')
+                            return
+                          }
+
+                          const transform = groupNode.getAbsoluteTransform()
+                          const inv = transform.copy().invert()
+                          const local = inv.point({ x: node.absolutePosition().x, y: node.absolutePosition().y })
+                          const newCol = Math.round((local.x - editCellMetrics.gapW / 2) / editCellMetrics.cellW)
+                          const newRow = Math.round((local.y - editCellMetrics.gapH / 2) / editCellMetrics.cellH)
+
+                          setDraggingLedKey(null)
+                          moveLed(led.index, newCol, newRow)
+                          updateCursor('grab')
+                        }}
+                        onDragMove={(e) => { e.cancelBubble = true }}
+                        onMouseEnter={() => updateCursor('grab')}
+                        onMouseLeave={() => updateCursor('default')}
+                        onMouseDown={() => updateCursor('grabbing')}
+                      />
+                    )
+                  })}
+
+                  {/* ── Edit mode: LED index labels ── */}
+                  {editCellMetrics && editLedCells?.map(led => {
+                    if (led.ghost) return null
+
+                      const lri: LedRenderInfo = {
+                        index: led.index,
+                        x: led.col * editCellMetrics.cellW + editCellMetrics.gapW / 2,
+                        y: led.row * editCellMetrics.cellH + editCellMetrics.gapH / 2,
+                        w: editCellMetrics.ledW,
+                        h: editCellMetrics.ledH,
+                        cr: editCellMetrics.cr,
+                        ghost: false,
+                      }
+                      const fontSize = getLedIndexFontSize(lri, stageScale)
+                      if (!fontSize) return null
+
+                      return (
+                        <Text
+                          key={`edit-idx-${led.index}`}
+                          x={lri.x}
+                          y={lri.y}
+                          width={lri.w}
+                          height={lri.h}
+                          text={String(led.index)}
+                          fontSize={fontSize}
+                          fontStyle="bold"
+                          align="center"
+                          verticalAlign="middle"
+                          lineHeight={1}
+                          fill={c.ledIndexText}
+                          perfectDrawEnabled={false}
+                          listening={false}
+                        />
+                      )
+                  })}
+
+                  {/* ── Edit mode: Confirm / Cancel buttons ── */}
+                  {isBeingEdited && (() => {
+                    const btnH = Math.max(0.8, 22 / stageScale)
+                    const btnGap = Math.max(0.15, 4 / stageScale)
+                    const btnY = -btnH - Math.max(0.3, 6 / stageScale)
+                    const fontSize = Math.max(0.3, 11 / stageScale)
+                    const cr = Math.max(0.15, 4 / stageScale)
+                    const cancelBtnW = Math.max(1.8, Math.max(48, cancelLabel.length * 7 + 18) / stageScale)
+                    const confirmBtnW = Math.max(1.8, Math.max(48, confirmLabel.length * 7 + 18) / stageScale)
+                    const cancelBtnX = renderWidth - confirmBtnW - cancelBtnW - btnGap
+                    const confirmBtnX = renderWidth - confirmBtnW
+
+                    return (
+                      <Group listening>
+                        {/* Cancel button */}
+                        <Group
+                          onClick={(e) => { e.cancelBubble = true; exitEditMode(false) }}
+                          onTap={(e) => { e.cancelBubble = true; exitEditMode(false) }}
+                          onMouseEnter={() => updateCursor('pointer')}
+                          onMouseLeave={() => updateCursor('default')}
+                        >
+                          <Rect
+                            x={cancelBtnX}
+                            y={btnY}
+                            width={cancelBtnW}
+                            height={btnH}
+                            cornerRadius={cr}
+                            fill={c.editCancelFill}
+                          />
+                          <Text
+                            x={cancelBtnX}
+                            y={btnY}
+                            width={cancelBtnW}
+                            height={btnH}
+                            text={cancelLabel}
+                            fontSize={fontSize}
+                            fontStyle="bold"
+                            fill="rgba(255,255,255,0.95)"
+                            align="center"
+                            verticalAlign="middle"
+                            lineHeight={1}
+                            listening={false}
+                          />
+                        </Group>
+                        {/* Confirm button */}
+                        <Group
+                          onClick={(e) => { e.cancelBubble = true; exitEditMode(true) }}
+                          onTap={(e) => { e.cancelBubble = true; exitEditMode(true) }}
+                          onMouseEnter={() => updateCursor('pointer')}
+                          onMouseLeave={() => updateCursor('default')}
+                        >
+                          <Rect
+                            x={confirmBtnX}
+                            y={btnY}
+                            width={confirmBtnW}
+                            height={btnH}
+                            cornerRadius={cr}
+                            fill={c.editConfirmFill}
+                          />
+                          <Text
+                            x={confirmBtnX}
+                            y={btnY}
+                            width={confirmBtnW}
+                            height={btnH}
+                            text={confirmLabel}
+                            fontSize={fontSize}
+                            fontStyle="bold"
+                            fill="rgba(255,255,255,0.95)"
+                            align="center"
+                            verticalAlign="middle"
+                            lineHeight={1}
+                            listening={false}
+                          />
+                        </Group>
+                      </Group>
+                    )
+                  })()}
+
+                  {/* ── Normal mode: LED rects (active + ghost in one pass) ── */}
+                  {!isBeingEdited && allLeds.map((led, i) => led.ghost ? (
                     <Shape
                       key={i}
                       listening={false}
@@ -902,7 +1253,6 @@ export function VisualGrid() {
                       }}
                     />
                   ) : (
-                    /* Active LED — solid fill */
                     <Group key={i} listening={false}>
                       {(() => {
                         const previewColor = placementColors?.[led.index]
@@ -987,7 +1337,7 @@ export function VisualGrid() {
                   ))}
 
                   {/* Stale warning badge (top-right corner) */}
-                  {isStale && (
+                  {!isBeingEdited && isStale && (
                     <Shape
                       listening={false}
                       sceneFunc={(ctx) => {
@@ -996,13 +1346,11 @@ export function VisualGrid() {
                         const cx = dev.width - badgeR * 0.5
                         const cy = badgeR * 0.5
 
-                        // Circle badge
                         canvas.beginPath()
                         canvas.arc(cx, cy, badgeR, 0, Math.PI * 2)
                         canvas.fillStyle = c.staleWarning
                         canvas.fill()
 
-                        // Exclamation mark
                         const fontSize = badgeR * 1.3
                         canvas.fillStyle = c.ledLockIcon
                         canvas.font = `bold ${fontSize}px sans-serif`
@@ -1013,12 +1361,12 @@ export function VisualGrid() {
                     />
                   )}
 
-                  {/* Resize handles (relative coords, move with Group) */}
-                  {isSelected && ([
+                  {/* Resize handles — only when selected and NOT in edit mode */}
+                  {isSelected && !isEditMode && ([
                     { key: 'tl' as const, cx: 0, cy: 0 },
-                    { key: 'tr' as const, cx: dev.width, cy: 0 },
-                    { key: 'bl' as const, cx: 0, cy: dev.height },
-                    { key: 'br' as const, cx: dev.width, cy: dev.height },
+                    { key: 'tr' as const, cx: renderWidth, cy: 0 },
+                    { key: 'bl' as const, cx: 0, cy: renderHeight },
+                    { key: 'br' as const, cx: renderWidth, cy: renderHeight },
                   ]).map(({ key, cx, cy }) => (
                     <Rect
                       key={`h-${key}`}
@@ -1041,19 +1389,18 @@ export function VisualGrid() {
                     />
                   ))}
 
-                  {/* Rotation handles — small circles offset outward from each corner */}
-                  {isSelected && ([
+                  {/* Rotation handles — only when selected and NOT in edit mode */}
+                  {isSelected && !isEditMode && ([
                     { key: 'rot-tl', cx: -rotateHandleOffset, cy: -rotateHandleOffset },
-                    { key: 'rot-tr', cx: dev.width + rotateHandleOffset, cy: -rotateHandleOffset },
-                    { key: 'rot-bl', cx: -rotateHandleOffset, cy: dev.height + rotateHandleOffset },
-                    { key: 'rot-br', cx: dev.width + rotateHandleOffset, cy: dev.height + rotateHandleOffset },
+                    { key: 'rot-tr', cx: renderWidth + rotateHandleOffset, cy: -rotateHandleOffset },
+                    { key: 'rot-bl', cx: -rotateHandleOffset, cy: renderHeight + rotateHandleOffset },
+                    { key: 'rot-br', cx: renderWidth + rotateHandleOffset, cy: renderHeight + rotateHandleOffset },
                   ]).map(({ key, cx, cy }) => (
                     <Group key={key}>
-                      {/* Dashed line from corner to rotation handle */}
                       <Line
                         points={[
-                          key.includes('tl') ? 0 : key.includes('tr') ? dev.width : key.includes('bl') ? 0 : dev.width,
-                          key.includes('tl') ? 0 : key.includes('tr') ? 0 : key.includes('bl') ? dev.height : dev.height,
+                          key.includes('tl') ? 0 : key.includes('tr') ? renderWidth : key.includes('bl') ? 0 : renderWidth,
+                          key.includes('tl') ? 0 : key.includes('tr') ? 0 : key.includes('bl') ? renderHeight : renderHeight,
                           cx, cy,
                         ]}
                         stroke={c.rotateGuide}
@@ -1086,16 +1433,16 @@ export function VisualGrid() {
                   ))}
 
                   {/* Rotation angle indicator */}
-                  {isSelected && rotation !== 0 && (
+                  {isSelected && !isEditMode && rotation !== 0 && (
                     <Text
-                      x={dev.width / 2}
+                      x={renderWidth / 2}
                       y={-Math.max(0.6, 14 / stageScale)}
                       text={`${Math.round(rotation * 10) / 10}°`}
                       fontSize={Math.max(0.4, 11 / stageScale)}
                       fill={c.rotateHandleFill}
                       align="center"
                       offsetX={0}
-                      width={dev.width}
+                      width={renderWidth}
                       listening={false}
                     />
                   )}
@@ -1105,101 +1452,103 @@ export function VisualGrid() {
           </Layer>
 
           {/* Canvas bounds layer (on top, interactive resize) */}
-          <Layer>
-            <Rect
-              x={canvasRect.x}
-              y={canvasRect.y}
-              width={canvasRect.width}
-              height={canvasRect.height}
-              stroke={c.bounds}
-              strokeWidth={2 / stageScale}
-              listening={false}
-            />
-
-            {[
-              {
-                key: 't' as const,
-                x: canvasRect.x,
-                y: canvasRect.y - canvasEdgeHit / 2,
-                width: canvasRect.width,
-                height: canvasEdgeHit,
-                cursor: 'ns-resize',
-              },
-              {
-                key: 'r' as const,
-                x: canvasRect.x + canvasRect.width - canvasEdgeHit / 2,
-                y: canvasRect.y,
-                width: canvasEdgeHit,
-                height: canvasRect.height,
-                cursor: 'ew-resize',
-              },
-              {
-                key: 'b' as const,
-                x: canvasRect.x,
-                y: canvasRect.y + canvasRect.height - canvasEdgeHit / 2,
-                width: canvasRect.width,
-                height: canvasEdgeHit,
-                cursor: 'ns-resize',
-              },
-              {
-                key: 'l' as const,
-                x: canvasRect.x - canvasEdgeHit / 2,
-                y: canvasRect.y,
-                width: canvasEdgeHit,
-                height: canvasRect.height,
-                cursor: 'ew-resize',
-              },
-            ].map(edge => (
+          {!isEditMode && (
+            <Layer>
               <Rect
-                key={`canvas-edge-${edge.key}`}
-                x={edge.x}
-                y={edge.y}
-                width={edge.width}
-                height={edge.height}
-                fill="transparent"
-                onMouseEnter={() => updateCursor(edge.cursor)}
-                onMouseLeave={() => updateCursor('default')}
-                onMouseDown={(e) => {
-                  e.cancelBubble = true
-                  e.evt.stopPropagation()
-                  startCanvasResize(edge.key)
-                }}
-                onTouchStart={(e) => {
-                  e.cancelBubble = true
-                  startCanvasResize(edge.key)
-                }}
+                x={canvasRect.x}
+                y={canvasRect.y}
+                width={canvasRect.width}
+                height={canvasRect.height}
+                stroke={c.bounds}
+                strokeWidth={2 / stageScale}
+                listening={false}
               />
-            ))}
 
-            {[
-              { key: 'tl' as const, cx: canvasRect.x, cy: canvasRect.y, cursor: 'nwse-resize' },
-              { key: 'tr' as const, cx: canvasRect.x + canvasRect.width, cy: canvasRect.y, cursor: 'nesw-resize' },
-              { key: 'bl' as const, cx: canvasRect.x, cy: canvasRect.y + canvasRect.height, cursor: 'nesw-resize' },
-              { key: 'br' as const, cx: canvasRect.x + canvasRect.width, cy: canvasRect.y + canvasRect.height, cursor: 'nwse-resize' },
-            ].map(corner => (
-              <Rect
-                key={`canvas-corner-${corner.key}`}
-                x={corner.cx - canvasHandleSize / 2}
-                y={corner.cy - canvasHandleSize / 2}
-                width={canvasHandleSize}
-                height={canvasHandleSize}
-                fill={c.handleFill}
-                stroke={c.handleStroke}
-                strokeWidth={1 / stageScale}
-                onMouseEnter={() => updateCursor(corner.cursor)}
-                onMouseLeave={() => updateCursor('default')}
-                onMouseDown={(e) => {
-                  e.cancelBubble = true
-                  e.evt.stopPropagation()
-                  startCanvasResize(corner.key)
-                }}
-                onTouchStart={(e) => {
-                  e.cancelBubble = true
-                  startCanvasResize(corner.key)
-                }}
-              />
-            ))}
-          </Layer>
+              {[
+                {
+                  key: 't' as const,
+                  x: canvasRect.x,
+                  y: canvasRect.y - canvasEdgeHit / 2,
+                  width: canvasRect.width,
+                  height: canvasEdgeHit,
+                  cursor: 'ns-resize',
+                },
+                {
+                  key: 'r' as const,
+                  x: canvasRect.x + canvasRect.width - canvasEdgeHit / 2,
+                  y: canvasRect.y,
+                  width: canvasEdgeHit,
+                  height: canvasRect.height,
+                  cursor: 'ew-resize',
+                },
+                {
+                  key: 'b' as const,
+                  x: canvasRect.x,
+                  y: canvasRect.y + canvasRect.height - canvasEdgeHit / 2,
+                  width: canvasRect.width,
+                  height: canvasEdgeHit,
+                  cursor: 'ns-resize',
+                },
+                {
+                  key: 'l' as const,
+                  x: canvasRect.x - canvasEdgeHit / 2,
+                  y: canvasRect.y,
+                  width: canvasEdgeHit,
+                  height: canvasRect.height,
+                  cursor: 'ew-resize',
+                },
+              ].map(edge => (
+                <Rect
+                  key={`canvas-edge-${edge.key}`}
+                  x={edge.x}
+                  y={edge.y}
+                  width={edge.width}
+                  height={edge.height}
+                  fill="transparent"
+                  onMouseEnter={() => updateCursor(edge.cursor)}
+                  onMouseLeave={() => updateCursor('default')}
+                  onMouseDown={(e) => {
+                    e.cancelBubble = true
+                    e.evt.stopPropagation()
+                    startCanvasResize(edge.key)
+                  }}
+                  onTouchStart={(e) => {
+                    e.cancelBubble = true
+                    startCanvasResize(edge.key)
+                  }}
+                />
+              ))}
+
+              {[
+                { key: 'tl' as const, cx: canvasRect.x, cy: canvasRect.y, cursor: 'nwse-resize' },
+                { key: 'tr' as const, cx: canvasRect.x + canvasRect.width, cy: canvasRect.y, cursor: 'nesw-resize' },
+                { key: 'bl' as const, cx: canvasRect.x, cy: canvasRect.y + canvasRect.height, cursor: 'nesw-resize' },
+                { key: 'br' as const, cx: canvasRect.x + canvasRect.width, cy: canvasRect.y + canvasRect.height, cursor: 'nwse-resize' },
+              ].map(corner => (
+                <Rect
+                  key={`canvas-corner-${corner.key}`}
+                  x={corner.cx - canvasHandleSize / 2}
+                  y={corner.cy - canvasHandleSize / 2}
+                  width={canvasHandleSize}
+                  height={canvasHandleSize}
+                  fill={c.handleFill}
+                  stroke={c.handleStroke}
+                  strokeWidth={1 / stageScale}
+                  onMouseEnter={() => updateCursor(corner.cursor)}
+                  onMouseLeave={() => updateCursor('default')}
+                  onMouseDown={(e) => {
+                    e.cancelBubble = true
+                    e.evt.stopPropagation()
+                    startCanvasResize(corner.key)
+                  }}
+                  onTouchStart={(e) => {
+                    e.cancelBubble = true
+                    startCanvasResize(corner.key)
+                  }}
+                />
+              ))}
+            </Layer>
+          )}
         </Stage>
       )}
     </div>

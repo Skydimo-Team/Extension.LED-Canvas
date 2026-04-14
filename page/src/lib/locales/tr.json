@@ -50,5 +50,14 @@
   "layoutManager.rangeMax": "Maks",
   "layoutManager.addColor": "Renk ekle",
   "layoutManager.removeColor": "Rengi kaldır",
-  "layoutManager.unsupported": "Bu parametre türü henüz desteklenmiyor."
+  "layoutManager.unsupported": "Bu parametre türü henüz desteklenmiyor.",
+  "device.ledCountMismatch": "LED sayısı değişti ({current} vs {expected})",
+  "device.layoutMismatch": "Düzen cihazdan farklı",
+  "device.confirmRemoveTitle": "Özel düzen kaldırılsın mı?",
+  "device.confirmRemoveCustom": "Bu yerleşim özel bir LED düzeni içeriyor. Kaldırıldığında düzen kaybolacak. Devam edilsin mi?",
+  "device.confirmRemoveYes": "Kaldır",
+  "device.confirmRemoveNo": "İptal",
+  "editMode.confirm": "Uygula",
+  "editMode.cancel": "İptal",
+  "editMode.hint": "LED'leri yeniden düzenlemek için sürükleyin. Izgara otomatik genişler."
 }

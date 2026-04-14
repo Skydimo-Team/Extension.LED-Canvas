@@ -50,5 +50,14 @@
   "layoutManager.rangeMax": "Макс.",
   "layoutManager.addColor": "Добавить цвет",
   "layoutManager.removeColor": "Удалить цвет",
-  "layoutManager.unsupported": "Этот тип параметра пока не поддерживается."
+  "layoutManager.unsupported": "Этот тип параметра пока не поддерживается.",
+  "device.ledCountMismatch": "Количество LED изменилось ({current} vs {expected})",
+  "device.layoutMismatch": "Раскладка отличается от устройства",
+  "device.confirmRemoveTitle": "Удалить пользовательскую раскладку?",
+  "device.confirmRemoveCustom": "Это размещение содержит пользовательскую раскладку LED. При удалении раскладка будет потеряна. Продолжить?",
+  "device.confirmRemoveYes": "Удалить",
+  "device.confirmRemoveNo": "Отмена",
+  "editMode.confirm": "Применить",
+  "editMode.cancel": "Отмена",
+  "editMode.hint": "Перетаскивайте LED для перестановки. Сетка расширяется автоматически."
 }

@@ -59,6 +59,19 @@ interface CanvasState {
   snapToGrid: boolean
   selectedId: string | null
 
+  /** ID of the device currently being edited (null = not in edit mode) */
+  editingDeviceId: string | null
+  /** Working copy of the matrix during edit mode */
+  editingMatrix: Matrix | null
+  /** Number of live LEDs that remain editable during edit mode */
+  editingAvailableLedCount: number | null
+  /** Grid dimensions during edit mode */
+  editingGridSize: { cols: number; rows: number } | null
+  /** Matrix before edit started (for cancel/revert and preserving rendered cell size) */
+  preEditMatrix: Matrix | null
+  /** Cell offset of the editing matrix relative to the placement's original top-left */
+  editingOrigin: { col: number; row: number } | null
+
   addDevice: (info: {
     deviceId: string
     outputId: string
@@ -77,6 +90,10 @@ interface CanvasState {
   setSnapToGrid: (snap: boolean) => void
   toggleSnapToGrid: () => void
   setSelectedId: (id: string | null) => void
+
+  enterEditMode: (deviceId: string) => void
+  exitEditMode: (confirm: boolean) => void
+  moveLed: (ledIndex: number, toCol: number, toRow: number) => void
 
   /** Replace local state with data from a backend layout snapshot */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -144,8 +161,162 @@ function mirrorMatrixHorizontally(matrix: Matrix | null, ledsCount: number): Mat
   }
 }
 
+function hasMissingSnapshotLeds(device: Pick<PlacedDevice, 'stale' | 'snapshot' | 'ledsCount'>) {
+  return device.stale
+    && device.snapshot != null
+    && typeof device.snapshot.ledsCount === 'number'
+    && device.snapshot.ledsCount > device.ledsCount
+}
+
+function buildEditModeSource(device: PlacedDevice): { matrix: Matrix | null; availableLedCount: number } {
+  const availableLedCount = Math.max(0, Math.floor(device.ledsCount))
+
+  if (hasMissingSnapshotLeds(device)) {
+    const snapshotLedCount = device.snapshot?.ledsCount ?? 0
+    return {
+      matrix: device.snapshot?.matrix ?? buildSequentialMatrix(snapshotLedCount),
+      availableLedCount,
+    }
+  }
+
+  return {
+    matrix: device.matrix ?? buildSequentialMatrix(device.ledsCount),
+    availableLedCount,
+  }
+}
+
+function normalizeMatrixForLedCount(matrix: Matrix, ledsCount: number): Matrix {
+  const total = Math.max(0, matrix.width * matrix.height)
+  const maxLedIndex = Math.max(0, Math.floor(ledsCount))
+  const normalizedMap = new Array<number>(total)
+
+  for (let index = 0; index < total; index += 1) {
+    const raw = matrix.map[index]
+    const ledIndex = typeof raw === 'number' ? Math.floor(raw) : Number.NaN
+    normalizedMap[index] = Number.isFinite(ledIndex) && ledIndex >= 0 && ledIndex < maxLedIndex
+      ? ledIndex
+      : -1
+  }
+
+  return {
+    width: matrix.width,
+    height: matrix.height,
+    map: normalizedMap,
+  }
+}
+
 function makeKey(deviceId: string, outputId: string, segmentId?: string) {
   return `${deviceId}::${outputId}::${segmentId ?? ''}`
+}
+
+export function computeMismatchFlags(
+  placed: PlacedDevice,
+  liveLedsCount: number,
+  liveMatrix: Matrix | null,
+): { ledCountMismatch: boolean; layoutMismatch: boolean } {
+  const snapshotCount = placed.snapshot?.ledsCount ?? placed.ledsCount
+  const ledCountMismatch = liveLedsCount !== snapshotCount
+
+  let layoutMismatch = false
+  if (!ledCountMismatch && placed.snapshot?.matrix && liveMatrix) {
+    layoutMismatch = JSON.stringify(placed.snapshot.matrix) !== JSON.stringify(liveMatrix)
+  }
+
+  return { ledCountMismatch, layoutMismatch }
+}
+
+export function buildEditedPlacedDevice(
+  device: PlacedDevice,
+  editingMatrix: Matrix,
+  referenceMatrix: Matrix,
+  editingOrigin: { col: number; row: number } | null,
+  options?: { persistSnapshot?: boolean },
+): PlacedDevice {
+  const baseCellWidth = device.width / Math.max(1, referenceMatrix.width)
+  const baseCellHeight = device.height / Math.max(1, referenceMatrix.height)
+  const origin = editingOrigin ?? { col: 0, row: 0 }
+  const nextWidth = Math.max(baseCellWidth, editingMatrix.width * baseCellWidth)
+  const nextHeight = Math.max(baseCellHeight, editingMatrix.height * baseCellHeight)
+  const liveMatrix = normalizeMatrixForLedCount(editingMatrix, device.ledsCount)
+
+  const nextSnapshot = options?.persistSnapshot
+    ? {
+      ...device.snapshot,
+      ledsCount: device.snapshot?.ledsCount ?? device.ledsCount,
+      matrix: structuredClone(editingMatrix),
+      customMatrix: true,
+    }
+    : device.snapshot
+
+  return {
+    ...device,
+    x: device.x + origin.col * baseCellWidth,
+    y: device.y + origin.row * baseCellHeight,
+    matrix: liveMatrix,
+    width: nextWidth,
+    height: nextHeight,
+    originalAspect: nextWidth / (nextHeight || 1),
+    snapshot: nextSnapshot,
+  }
+}
+
+function trimMatrixToOccupiedBounds(
+  matrix: Matrix,
+  origin: { col: number; row: number },
+): { matrix: Matrix; origin: { col: number; row: number } } {
+  const { width, height, map } = matrix
+
+  const isColumnEmpty = (col: number) => {
+    for (let row = 0; row < height; row += 1) {
+      if (map[row * width + col] >= 0) return false
+    }
+    return true
+  }
+
+  const isRowEmpty = (row: number) => {
+    for (let col = 0; col < width; col += 1) {
+      if (map[row * width + col] >= 0) return false
+    }
+    return true
+  }
+
+  let left = 0
+  while (left < width - 1 && isColumnEmpty(left)) left += 1
+
+  let right = width - 1
+  while (right > left && isColumnEmpty(right)) right -= 1
+
+  let top = 0
+  while (top < height - 1 && isRowEmpty(top)) top += 1
+
+  let bottom = height - 1
+  while (bottom > top && isRowEmpty(bottom)) bottom -= 1
+
+  if (left === 0 && right === width - 1 && top === 0 && bottom === height - 1) {
+    return { matrix, origin }
+  }
+
+  const nextWidth = Math.max(1, right - left + 1)
+  const nextHeight = Math.max(1, bottom - top + 1)
+  const nextMap = new Array<number>(nextWidth * nextHeight).fill(-1)
+
+  for (let row = top; row <= bottom; row += 1) {
+    for (let col = left; col <= right; col += 1) {
+      nextMap[(row - top) * nextWidth + (col - left)] = map[row * width + col]
+    }
+  }
+
+  return {
+    matrix: {
+      width: nextWidth,
+      height: nextHeight,
+      map: nextMap,
+    },
+    origin: {
+      col: origin.col + left,
+      row: origin.row + top,
+    },
+  }
 }
 
 function trimPastStates(pastStates: Partial<CanvasHistoryState>[]) {
@@ -191,6 +362,12 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
   canvasBounds: DEFAULT_CANVAS_BOUNDS,
   snapToGrid: false,
   selectedId: null,
+  editingDeviceId: null,
+  editingMatrix: null,
+  editingAvailableLedCount: null,
+  editingGridSize: null,
+  preEditMatrix: null,
+  editingOrigin: null,
 
   hydrateFromLayout(layoutId, canvas, placements, snapToGrid) {
     // Pause tracking so the hydration itself is not recorded as undoable
@@ -213,6 +390,12 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
       placedDevices: devices,
       snapToGrid: !!snapToGrid,
       selectedId: null,
+      editingDeviceId: null,
+      editingMatrix: null,
+      editingAvailableLedCount: null,
+      editingGridSize: null,
+      preEditMatrix: null,
+      editingOrigin: null,
     })
 
     // Clear history and resume tracking after hydration
@@ -275,6 +458,12 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
     set(s => ({
       placedDevices: s.placedDevices.filter(d => d.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
+      editingDeviceId: s.editingDeviceId === id ? null : s.editingDeviceId,
+      editingMatrix: s.editingDeviceId === id ? null : s.editingMatrix,
+      editingAvailableLedCount: s.editingDeviceId === id ? null : s.editingAvailableLedCount,
+      editingGridSize: s.editingDeviceId === id ? null : s.editingGridSize,
+      preEditMatrix: s.editingDeviceId === id ? null : s.preEditMatrix,
+      editingOrigin: s.editingDeviceId === id ? null : s.editingOrigin,
     }))
   },
 
@@ -336,6 +525,160 @@ export const useCanvasStore = create<CanvasState>()(temporal((set, get) => ({
 
   setSelectedId(id) {
     set({ selectedId: id })
+  },
+
+  enterEditMode(deviceId) {
+    const state = get()
+    const dev = state.placedDevices.find(d => d.id === deviceId)
+    if (!dev || state.editingDeviceId) return
+
+    const { matrix: source, availableLedCount } = buildEditModeSource(dev)
+    if (!source) return
+
+    const editingMatrix = structuredClone(source)
+    const preEditMatrix = structuredClone(source)
+
+    getTemporalStore().getState().pause()
+
+    set({
+      editingDeviceId: deviceId,
+      editingMatrix,
+      editingAvailableLedCount: availableLedCount,
+      editingGridSize: { cols: editingMatrix.width, rows: editingMatrix.height },
+      preEditMatrix,
+      editingOrigin: { col: 0, row: 0 },
+      selectedId: deviceId,
+    })
+  },
+
+  exitEditMode(confirm) {
+    const state = get()
+    const { editingDeviceId, editingMatrix, preEditMatrix, editingOrigin } = state
+    if (!editingDeviceId) return
+
+    if (confirm && editingMatrix) {
+      const temporal = getTemporalStore()
+      const { placedDevices, canvasBounds, snapToGrid } = state
+      const beforeState: CanvasHistoryState = structuredClone({ placedDevices, canvasBounds, snapToGrid })
+      const referenceMatrix = preEditMatrix ?? editingMatrix
+
+      const newDevices = state.placedDevices.map(d => {
+        if (d.id !== editingDeviceId) return d
+
+        return buildEditedPlacedDevice(d, editingMatrix, referenceMatrix, editingOrigin, {
+          persistSnapshot: true,
+        })
+      })
+
+      set({
+        placedDevices: newDevices,
+        editingDeviceId: null,
+        editingMatrix: null,
+        editingAvailableLedCount: null,
+        editingGridSize: null,
+        preEditMatrix: null,
+        editingOrigin: null,
+      })
+
+      temporal.getState().resume()
+      temporal.setState(s => ({
+        pastStates: trimPastStates([...s.pastStates, beforeState]),
+        futureStates: [],
+      }))
+    } else {
+      set({
+        editingDeviceId: null,
+        editingMatrix: null,
+        editingAvailableLedCount: null,
+        editingGridSize: null,
+        preEditMatrix: null,
+        editingOrigin: null,
+      })
+      getTemporalStore().getState().resume()
+    }
+  },
+
+  moveLed(ledIndex, toCol, toRow) {
+    const state = get()
+    const { editingMatrix } = state
+    if (!editingMatrix) return
+    const editingAvailableLedCount = state.editingAvailableLedCount ?? Number.MAX_SAFE_INTEGER
+    if (ledIndex >= editingAvailableLedCount) return
+
+    const targetCol = Math.round(toCol)
+    const targetRow = Math.round(toRow)
+    if (!Number.isFinite(targetCol) || !Number.isFinite(targetRow)) return
+
+    let { width, height } = editingMatrix
+    let newMap = [...editingMatrix.map]
+    let nextOrigin = state.editingOrigin ?? { col: 0, row: 0 }
+
+    const oldPos = newMap.indexOf(ledIndex)
+    const oldCol = oldPos >= 0 ? oldPos % width : -1
+    const oldRow = oldPos >= 0 ? Math.floor(oldPos / width) : -1
+
+    let shiftedTargetCol = targetCol
+    let shiftedTargetRow = targetRow
+
+    const expandLeft = Math.max(0, -shiftedTargetCol)
+    const expandTop = Math.max(0, -shiftedTargetRow)
+    const expandRight = Math.max(0, shiftedTargetCol - (width - 1))
+    const expandBottom = Math.max(0, shiftedTargetRow - (height - 1))
+
+    if (expandLeft > 0 || expandTop > 0 || expandRight > 0 || expandBottom > 0) {
+      const nextWidth = width + expandLeft + expandRight
+      const nextHeight = height + expandTop + expandBottom
+      const expanded = new Array<number>(nextWidth * nextHeight).fill(-1)
+
+      for (let row = 0; row < height; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          expanded[(row + expandTop) * nextWidth + (col + expandLeft)] = newMap[row * width + col]
+        }
+      }
+
+      newMap = expanded
+      width = nextWidth
+      height = nextHeight
+      shiftedTargetCol += expandLeft
+      shiftedTargetRow += expandTop
+      nextOrigin = {
+        col: nextOrigin.col - expandLeft,
+        row: nextOrigin.row - expandTop,
+      }
+    }
+
+    const shiftedOldPos = oldPos >= 0
+      ? (oldRow + expandTop) * width + (oldCol + expandLeft)
+      : -1
+    const targetIdx = shiftedTargetRow * width + shiftedTargetCol
+
+    if (targetIdx < 0 || targetIdx >= newMap.length) return
+
+    if (shiftedOldPos === targetIdx) {
+      const trimmed = trimMatrixToOccupiedBounds({ width, height, map: newMap }, nextOrigin)
+      set({
+        editingMatrix: trimmed.matrix,
+        editingGridSize: { cols: trimmed.matrix.width, rows: trimmed.matrix.height },
+        editingOrigin: trimmed.origin,
+      })
+      return
+    }
+
+    const displacedLed = newMap[targetIdx]
+    if (displacedLed >= editingAvailableLedCount) return
+
+    if (shiftedOldPos >= 0) {
+      newMap[shiftedOldPos] = displacedLed >= 0 ? displacedLed : -1
+    }
+    newMap[targetIdx] = ledIndex
+
+    const trimmed = trimMatrixToOccupiedBounds({ width, height, map: newMap }, nextOrigin)
+
+    set({
+      editingMatrix: trimmed.matrix,
+      editingGridSize: { cols: trimmed.matrix.width, rows: trimmed.matrix.height },
+      editingOrigin: trimmed.origin,
+    })
   },
 }), {
   partialize: (state) => ({

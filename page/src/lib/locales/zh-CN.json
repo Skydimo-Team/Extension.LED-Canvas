@@ -50,5 +50,14 @@
   "layoutManager.rangeMax": "最大",
   "layoutManager.addColor": "添加颜色",
   "layoutManager.removeColor": "删除颜色",
-  "layoutManager.unsupported": "这个参数类型暂时还不支持。"
+  "layoutManager.unsupported": "这个参数类型暂时还不支持。",
+  "device.ledCountMismatch": "灯珠数量已变更（{current} vs {expected}）",
+  "device.layoutMismatch": "布局与设备不一致",
+  "device.confirmRemoveTitle": "移除自定义布局？",
+  "device.confirmRemoveCustom": "当前放置包含自定义灯珠布局，移除后将丢失该布局。是否继续？",
+  "device.confirmRemoveYes": "移除",
+  "device.confirmRemoveNo": "取消",
+  "editMode.confirm": "确认",
+  "editMode.cancel": "取消",
+  "editMode.hint": "拖动灯珠以调整布局，网格会自动扩展。"
 }

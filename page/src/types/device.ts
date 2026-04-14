@@ -17,6 +17,8 @@ export interface PlacementSnapshot {
   ledsCount: number
   matrix?: Matrix | null
   name?: string
+  /** True when the user has manually edited the LED layout */
+  customMatrix?: boolean
 }
 
 /** A segment within an output (sub-zone) */

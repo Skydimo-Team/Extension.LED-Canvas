@@ -50,5 +50,14 @@
   "layoutManager.rangeMax": "Max",
   "layoutManager.addColor": "Add color",
   "layoutManager.removeColor": "Remove color",
-  "layoutManager.unsupported": "This parameter type is not supported yet."
+  "layoutManager.unsupported": "This parameter type is not supported yet.",
+  "device.ledCountMismatch": "LED count changed ({current} vs {expected})",
+  "device.layoutMismatch": "Layout differs from device",
+  "device.confirmRemoveTitle": "Remove custom layout?",
+  "device.confirmRemoveCustom": "This placement has a custom LED layout. Removing it will discard the layout. Continue?",
+  "device.confirmRemoveYes": "Remove",
+  "device.confirmRemoveNo": "Cancel",
+  "editMode.confirm": "Apply",
+  "editMode.cancel": "Cancel",
+  "editMode.hint": "Drag LEDs to rearrange. Grid expands automatically."
 }

@@ -4,7 +4,15 @@ import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleH
 import { DeviceTree } from '@/components/DeviceTree'
 import { LayoutManager } from '@/components/LayoutManager'
 import { VisualGrid } from '@/components/VisualGrid'
-import { useCanvasStore, getTemporalStore, beginCanvasHistoryBatch, endCanvasHistoryBatch } from '@/lib/canvasStore'
+import {
+  useCanvasStore,
+  getTemporalStore,
+  beginCanvasHistoryBatch,
+  endCanvasHistoryBatch,
+  buildEditedPlacedDevice,
+  type CanvasBounds,
+  type PlacedDevice,
+} from '@/lib/canvasStore'
 import { useBridgeStore } from '@/lib/bridge'
 import type { LayoutInfo } from '@/lib/bridge'
 import { cn } from '@/lib/utils'
@@ -28,6 +36,34 @@ function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   const tagName = target.tagName
   return target.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT'
+}
+
+function serializePlacementSyncState(placed: PlacedDevice[], canvasBounds: CanvasBounds) {
+  const canvasX = Number.isFinite(canvasBounds.x) ? canvasBounds.x : 0
+  const canvasY = Number.isFinite(canvasBounds.y) ? canvasBounds.y : 0
+
+  return JSON.stringify({
+    canvas: {
+      width: canvasBounds.width,
+      height: canvasBounds.height,
+    },
+    placements: placed.map(d => ({
+      id: d.id,
+      deviceId: d.deviceId,
+      port: d.port,
+      outputId: d.outputId,
+      segmentId: d.segmentId,
+      x: d.x - canvasX,
+      y: d.y - canvasY,
+      width: d.width,
+      height: d.height,
+      rotation: d.rotation ?? 0,
+      ledsCount: d.ledsCount,
+      matrix: d.matrix,
+      brightness: d.brightness ?? 100,
+      snapshot: d.snapshot,
+    })),
+  })
 }
 
 function GridSizeInput({ label, ariaLabel, value, onCommit, onEditStart, onEditEnd }: {
@@ -260,6 +296,10 @@ function App() {
   const placedDevices = useCanvasStore(s => s.placedDevices)
   const canvasLayoutId = useCanvasStore(s => s.layoutId)
   const hydrateFromLayout = useCanvasStore(s => s.hydrateFromLayout)
+  const editingDeviceId = useCanvasStore(s => s.editingDeviceId)
+  const editingMatrix = useCanvasStore(s => s.editingMatrix)
+  const preEditMatrix = useCanvasStore(s => s.preEditMatrix)
+  const editingOrigin = useCanvasStore(s => s.editingOrigin)
 
   const layouts = useBridgeStore(s => s.layouts)
   const activeLayoutId = useBridgeStore(s => s.activeLayoutId)
@@ -270,12 +310,38 @@ function App() {
   const registerCanvas = useBridgeStore(s => s.registerCanvas)
   const unregisterCanvas = useBridgeStore(s => s.unregisterCanvas)
   const syncPlacements = useBridgeStore(s => s.syncPlacements)
+  const previewPlacements = useBridgeStore(s => s.previewPlacements)
+  const clearPlacementPreview = useBridgeStore(s => s.clearPlacementPreview)
   const updateSnap = useBridgeStore(s => s.updateSnap)
 
   const activeLayout = layouts.find(l => l.id === activeLayoutId) ?? null
   const canvasRegistered = activeLayout?.registered ?? false
   const canvasWidth = Math.max(1, Math.round(canvasBounds.width))
   const canvasHeight = Math.max(1, Math.round(canvasBounds.height))
+  const previewSyncRef = useRef<{ layoutId: string; signature: string } | null>(null)
+
+  const editingPreviewDevices = useMemo(() => {
+    if (!editingDeviceId || !editingMatrix) return null
+
+    const referenceMatrix = preEditMatrix ?? editingMatrix
+    return placedDevices.map(device => (
+      device.id === editingDeviceId
+        ? buildEditedPlacedDevice(device, editingMatrix, referenceMatrix, editingOrigin)
+        : device
+    ))
+  }, [editingDeviceId, editingMatrix, editingOrigin, placedDevices, preEditMatrix])
+
+  const committedPlacementSignature = useMemo(
+    () => serializePlacementSyncState(placedDevices, canvasBounds),
+    [placedDevices, canvasBounds],
+  )
+
+  const editingPreviewSignature = useMemo(
+    () => editingPreviewDevices
+      ? serializePlacementSyncState(editingPreviewDevices, canvasBounds)
+      : null,
+    [editingPreviewDevices, canvasBounds],
+  )
 
   // Hydrate canvas store when active layout changes or layouts arrive from backend
   const hydratedRef = useRef<string | null>(null)
@@ -294,6 +360,7 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isEditableTarget(event.target)) return
+      if (useCanvasStore.getState().editingDeviceId) return
 
       const isModifierPressed = event.ctrlKey || event.metaKey
       if (!isModifierPressed || event.altKey) return
@@ -314,6 +381,69 @@ function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  useEffect(() => {
+    const activePreview = previewSyncRef.current
+
+    if (
+      editingDeviceId
+      && activeLayoutId
+      && canvasLayoutId === activeLayoutId
+      && editingPreviewDevices
+      && editingPreviewSignature
+      && editingPreviewSignature !== committedPlacementSignature
+    ) {
+      if (
+        !activePreview
+        || activePreview.layoutId !== activeLayoutId
+        || activePreview.signature !== editingPreviewSignature
+      ) {
+        previewPlacements(activeLayoutId, editingPreviewDevices, canvasBounds)
+        previewSyncRef.current = {
+          layoutId: activeLayoutId,
+          signature: editingPreviewSignature,
+        }
+      }
+      return
+    }
+
+    if (
+      editingDeviceId
+      && activeLayoutId
+      && activePreview
+      && activePreview.layoutId === activeLayoutId
+      && editingPreviewSignature === committedPlacementSignature
+    ) {
+      clearPlacementPreview(activeLayoutId)
+      previewSyncRef.current = null
+      return
+    }
+
+    if (!editingDeviceId && activePreview) {
+      if (
+        activePreview.layoutId === activeLayoutId
+        && canvasLayoutId === activeLayoutId
+        && activePreview.signature === committedPlacementSignature
+      ) {
+        syncPlacements(activeLayoutId, placedDevices, canvasBounds)
+      } else {
+        clearPlacementPreview(activePreview.layoutId)
+      }
+      previewSyncRef.current = null
+    }
+  }, [
+    activeLayoutId,
+    canvasBounds,
+    canvasLayoutId,
+    clearPlacementPreview,
+    committedPlacementSignature,
+    editingDeviceId,
+    editingPreviewDevices,
+    editingPreviewSignature,
+    placedDevices,
+    previewPlacements,
+    syncPlacements,
+  ])
 
   // Debounced placement sync
   const syncTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)

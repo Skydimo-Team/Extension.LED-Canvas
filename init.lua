@@ -27,6 +27,7 @@ local config            = nil   -- Full persisted configuration table
 local routing_tables      = {}  -- layout_id → routing table
 local core_locked_outputs = {}  -- output_key → { port, outputId, indices_set }
 local placement_led_status = {} -- layout_id → { placement_id → { blockedLedIndices, blockedLedCount, availableLedCount } }
+local preview_placement_overrides = {} -- layout_id → { placements, canvas }
 local random_seeded       = false
 
 -- Forward declarations for functions referenced before definition
@@ -442,7 +443,7 @@ local function placement_routing_key(placement)
     return key
 end
 
---- Normalize a snapshot table (ledsCount, matrix, name).
+--- Normalize a snapshot table (ledsCount, matrix, name, customMatrix).
 local function normalize_snapshot(snapshot, leds_count)
     if type(snapshot) ~= "table" or snapshot == json.null then
         return nil
@@ -455,6 +456,7 @@ local function normalize_snapshot(snapshot, leds_count)
         ledsCount = snap_leds,
         matrix = normalize_matrix(snapshot.matrix, snap_leds),
         name = type(snapshot.name) == "string" and snapshot.name or nil,
+        customMatrix = snapshot.customMatrix == true or nil,
     }
 end
 
@@ -498,19 +500,22 @@ end
 
 --- Compare a snapshot against the current live device state.
 --- Returns true if the device has changed since the snapshot was taken.
+--- When the user has a custom matrix (customMatrix == true), only LED count
+--- changes are considered stale — matrix dimension changes are intentional.
 local function is_placement_stale(snapshot, device_lookup, device_id, output_id, segment_id)
     if not snapshot then
         return false
     end
     local live = build_snapshot_from_device(device_lookup, device_id, output_id, segment_id)
     if not live then
-        -- Device is offline; not considered stale.
         return false
     end
     if snapshot.ledsCount ~= live.ledsCount then
         return true
     end
-    -- Compare matrix dimensions.
+    if snapshot.customMatrix then
+        return false
+    end
     local snap_mat = snapshot.matrix
     local live_mat = live.matrix
     if (snap_mat == nil) ~= (live_mat == nil) then
@@ -581,6 +586,20 @@ local function normalize_placements(placements, device_lookup)
     end
 
     return normalized
+end
+
+local function build_preview_placement_override(layout, placements, canvas)
+    local base_canvas = type(layout and layout.canvas) == "table" and layout.canvas or {}
+
+    return {
+        placements = normalize_placements(placements, get_device_lookup()),
+        canvas = {
+            width = sanitize_canvas_side(canvas and canvas.width, base_canvas.width or DEFAULT_GRID_W),
+            height = sanitize_canvas_side(canvas and canvas.height, base_canvas.height or DEFAULT_GRID_H),
+            x = tonumber(base_canvas.x) or 0,
+            y = tonumber(base_canvas.y) or 0,
+        },
+    }
 end
 
 local function normalize_layout(layout, existing_ids, device_lookup)
@@ -957,18 +976,21 @@ local function rebuild_all_routing(device_lookup)
 
     for _, layout in ipairs(config.layouts) do
         local status = {}
+        local preview_override = preview_placement_overrides[layout.id]
+        local placement_source = preview_override and preview_override.placements or layout.placements or {}
+        local canvas_source = preview_override and preview_override.canvas or layout.canvas
 
         if layout.registered then
             local runtime_placements = {}
-            for _, placement in ipairs(layout.placements or {}) do
+            for _, placement in ipairs(placement_source) do
                 local runtime = runtime_placement(placement, lookup)
                 if runtime and #runtime.actualIndices > 0 then
                     runtime_placements[#runtime_placements + 1] = runtime
                 end
             end
 
-            local cw = layout.canvas and layout.canvas.width or DEFAULT_GRID_W
-            local ch = layout.canvas and layout.canvas.height or DEFAULT_GRID_H
+            local cw = canvas_source and canvas_source.width or DEFAULT_GRID_W
+            local ch = canvas_source and canvas_source.height or DEFAULT_GRID_H
             local rt = routing.build(runtime_placements, cw, ch)
 
             -- Resolve conflicts: earlier layouts in the array take priority.
@@ -1014,7 +1036,7 @@ local function rebuild_all_routing(device_lookup)
             routing_tables[layout.id] = rt
         else
             -- Non-registered: compute blocked status without claiming ownership.
-            for _, placement in ipairs(layout.placements or {}) do
+            for _, placement in ipairs(placement_source) do
                 if type(placement.id) == "string" then
                     local runtime = runtime_placement(placement, lookup)
                     if runtime then
@@ -1388,6 +1410,7 @@ function P.on_page_message(msg)
     elseif msg.type == "delete_layout" then
         local layout, idx = find_layout(msg.layout_id)
         if layout and #config.layouts > 1 then
+            preview_placement_overrides[msg.layout_id] = nil
             -- Unregister if active
             if layout.registered then
                 unregister_canvas_device(layout)
@@ -1445,9 +1468,26 @@ function P.on_page_message(msg)
         local lid = msg.layout_id or config.active_layout_id
         local layout = find_layout(lid)
         if layout then
+            preview_placement_overrides[lid] = nil
             unregister_canvas_device(layout)
             save_config()
             emit_full_state()
+        end
+
+    -- ── Temporary preview placements for edit mode ──
+    elseif msg.type == "preview_placements" then
+        local lid = msg.layout_id or config.active_layout_id
+        local layout = find_layout(lid)
+        if layout then
+            preview_placement_overrides[lid] = build_preview_placement_override(layout, msg.data, msg.canvas)
+            rebuild_all_routing()
+        end
+
+    elseif msg.type == "clear_placement_preview" then
+        local lid = msg.layout_id or config.active_layout_id
+        if preview_placement_overrides[lid] then
+            preview_placement_overrides[lid] = nil
+            rebuild_all_routing()
         end
 
     -- ── Update placements for a layout ──
@@ -1455,6 +1495,7 @@ function P.on_page_message(msg)
         local lid = msg.layout_id or config.active_layout_id
         local layout = find_layout(lid)
         if layout then
+            preview_placement_overrides[lid] = nil
             layout.placements = normalize_placements(msg.data, get_device_lookup())
             local routing_rebuilt = false
             if msg.canvas then

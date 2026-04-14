@@ -120,6 +120,8 @@ interface BridgeState {
   registerCanvas: (layoutId: string, width: number, height: number) => void
   unregisterCanvas: (layoutId: string) => void
   syncPlacements: (layoutId: string, placed: PlacedDevice[], canvasBounds: CanvasBounds) => void
+  previewPlacements: (layoutId: string, placed: PlacedDevice[], canvasBounds: CanvasBounds) => void
+  clearPlacementPreview: (layoutId: string) => void
   updatePlacementBrightness: (layoutId: string, placementId: string, brightness: number) => void
   updateSnap: (layoutId: string, snap: boolean) => void
   setVirtualDevicePower: (layoutId: string, powerOn: boolean) => void
@@ -201,6 +203,34 @@ function normalizeEffects(effects: unknown): EffectInfo[] {
       ...effect,
       params: Array.isArray(effect.params) ? effect.params : [],
     }))
+}
+
+function buildPlacementSyncPayload(placed: PlacedDevice[], canvasBounds: CanvasBounds) {
+  const canvasX = Number.isFinite(canvasBounds.x) ? canvasBounds.x : 0
+  const canvasY = Number.isFinite(canvasBounds.y) ? canvasBounds.y : 0
+
+  return {
+    canvas: {
+      width: canvasBounds.width,
+      height: canvasBounds.height,
+    },
+    data: placed.map(d => ({
+      id: d.id,
+      deviceId: d.deviceId,
+      port: d.port,
+      outputId: d.outputId,
+      segmentId: d.segmentId,
+      x: d.x - canvasX,
+      y: d.y - canvasY,
+      width: d.width,
+      height: d.height,
+      rotation: d.rotation ?? 0,
+      ledsCount: d.ledsCount,
+      matrix: d.matrix,
+      brightness: d.brightness ?? 100,
+      snapshot: d.snapshot,
+    })),
+  }
 }
 
 export const useBridgeStore = create<BridgeState>((set, get) => {
@@ -397,34 +427,27 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     },
 
     syncPlacements(layoutId, placed, canvasBounds) {
-      const canvasX = Number.isFinite(canvasBounds.x) ? canvasBounds.x : 0
-      const canvasY = Number.isFinite(canvasBounds.y) ? canvasBounds.y : 0
-
-      const data = placed.map(d => ({
-        id: d.id,
-        deviceId: d.deviceId,
-        port: d.port,
-        outputId: d.outputId,
-        segmentId: d.segmentId,
-        x: d.x - canvasX,
-        y: d.y - canvasY,
-        width: d.width,
-        height: d.height,
-        rotation: d.rotation ?? 0,
-        ledsCount: d.ledsCount, matrix: d.matrix,
-        brightness: d.brightness ?? 100,
-        snapshot: d.snapshot,
-      }))
+      const payload = buildPlacementSyncPayload(placed, canvasBounds)
 
       sendToExt({
         type: 'update_placements',
         layout_id: layoutId,
-        canvas: {
-          width: canvasBounds.width,
-          height: canvasBounds.height,
-        },
-        data,
+        ...payload,
       })
+    },
+
+    previewPlacements(layoutId, placed, canvasBounds) {
+      const payload = buildPlacementSyncPayload(placed, canvasBounds)
+
+      sendToExt({
+        type: 'preview_placements',
+        layout_id: layoutId,
+        ...payload,
+      })
+    },
+
+    clearPlacementPreview(layoutId) {
+      sendToExt({ type: 'clear_placement_preview', layout_id: layoutId })
     },
 
     updatePlacementBrightness(layoutId, placementId, brightness) {

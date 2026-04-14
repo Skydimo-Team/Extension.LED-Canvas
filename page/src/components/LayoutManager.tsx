@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Plus, RotateCcw, X } from 'lucide-react'
 import { ScrollArea } from 'radix-ui'
 import {
@@ -193,24 +193,27 @@ function EffectParamField({
 }) {
   const label = resolveLocalizedText(param.label, locale) || param.key
   const commonClass = 'h-[32px] w-full rounded-[8px] border border-border bg-secondary px-2 text-[12px] text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60'
-  const [draftValue, setDraftValue] = useState<unknown>(() => cloneValue(value))
+  const syncedValue = useMemo(() => cloneValue(value), [value])
+  const [draftValue, setDraftValue] = useState<unknown>(() => syncedValue)
   const [isInteracting, setIsInteracting] = useState(false)
-  const draftValueRef = useRef(draftValue)
-  const lastCommittedValueRef = useRef<unknown>(cloneValue(value))
+  const resolvedValue = isInteracting ? draftValue : syncedValue
+  const draftValueRef = useRef(resolvedValue)
+  const lastCommittedValueRef = useRef<unknown>(syncedValue)
 
   useEffect(() => {
-    draftValueRef.current = draftValue
-  }, [draftValue])
+    draftValueRef.current = resolvedValue
+  }, [resolvedValue])
 
   useEffect(() => {
-    const nextValue = cloneValue(value)
-    lastCommittedValueRef.current = nextValue
-    if (!isInteracting) {
-      setDraftValue(nextValue)
-    }
-  }, [value, isInteracting])
+    lastCommittedValueRef.current = syncedValue
+  }, [syncedValue])
 
-  const commitDeferredValue = (nextValue?: unknown) => {
+  const startInteraction = useCallback(() => {
+    setDraftValue(cloneValue(syncedValue))
+    setIsInteracting(true)
+  }, [syncedValue])
+
+  const commitDeferredValue = useCallback((nextValue?: unknown) => {
     const resolvedValue = cloneValue(nextValue ?? draftValueRef.current)
     setIsInteracting(false)
     setDraftValue(resolvedValue)
@@ -221,7 +224,7 @@ function EffectParamField({
 
     lastCommittedValueRef.current = cloneValue(resolvedValue)
     onChange(resolvedValue)
-  }
+  }, [onChange])
 
   useEffect(() => {
     if (!isInteracting || (param.type !== 'slider' && param.type !== 'range_slider')) {
@@ -239,7 +242,7 @@ function EffectParamField({
       window.removeEventListener('pointerup', handlePointerRelease)
       window.removeEventListener('pointercancel', handlePointerRelease)
     }
-  }, [isInteracting, param.type])
+  }, [commitDeferredValue, isInteracting, param.type])
 
   // Toggle type uses horizontal BasicSettingRow layout
   if (param.type === 'toggle') {
@@ -267,7 +270,7 @@ function EffectParamField({
       const min = normalizeNumber(param.min, 0)
       const max = normalizeNumber(param.max, 100)
       const step = normalizeNumber(param.step, 1)
-      const numericValue = Math.min(max, Math.max(min, normalizeNumber(draftValue, min)))
+      const numericValue = Math.min(max, Math.max(min, normalizeNumber(resolvedValue, min)))
       control = (
         <div className="flex items-center gap-2">
           <input
@@ -278,7 +281,7 @@ function EffectParamField({
             step={step}
             value={numericValue}
             disabled={disabled}
-            onPointerDown={() => setIsInteracting(true)}
+            onPointerDown={startInteraction}
             onChange={e => {
               setIsInteracting(true)
               setDraftValue(Number(e.target.value))
@@ -304,7 +307,7 @@ function EffectParamField({
       const min = normalizeNumber(param.min, 0)
       const max = normalizeNumber(param.max, 100)
       const step = normalizeNumber(param.step, 1)
-      const [start, end] = normalizeRangeValue(param, draftValue)
+      const [start, end] = normalizeRangeValue(param, resolvedValue)
 
       control = (
         <div className="grid gap-2">
@@ -318,7 +321,7 @@ function EffectParamField({
               step={step}
               value={start}
               disabled={disabled}
-              onPointerDown={() => setIsInteracting(true)}
+              onPointerDown={startInteraction}
               onChange={e => {
                 setIsInteracting(true)
                 const nextStart = Math.min(Number(e.target.value), end)
@@ -347,7 +350,7 @@ function EffectParamField({
               step={step}
               value={end}
               disabled={disabled}
-              onPointerDown={() => setIsInteracting(true)}
+              onPointerDown={startInteraction}
               onChange={e => {
                 setIsInteracting(true)
                 const nextEnd = Math.max(Number(e.target.value), start)
