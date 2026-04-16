@@ -24,7 +24,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -578,12 +577,6 @@ export function StudioImportDialog({
       <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t('studioImport.title')}</DialogTitle>
-          <DialogDescription>
-            {step === 'select' && t('studioImport.selectTab')}
-            {step === 'match' && t('studioImport.matchDevices')}
-            {step === 'leds' && t('studioImport.ledMismatch.title')}
-            {step === 'confirm' && t('studioImport.confirm')}
-          </DialogDescription>
         </DialogHeader>
 
         <ScrollArea.Root className="flex-1 min-h-0 overflow-hidden">
