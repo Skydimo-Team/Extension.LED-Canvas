@@ -358,8 +358,13 @@ function App() {
     [editingPreviewDevices, canvasBounds],
   )
 
-  // Hydrate canvas store when active layout changes or layouts arrive from backend
+  // Hydrate canvas store when active layout changes or layouts arrive from backend.
+  // After hydration we record the serialized signature so the debounced-sync
+  // effect can tell "this state came from the backend" and avoid sending it
+  // right back — preventing a redundant round-trip that could persist stale
+  // runtime data.
   const hydratedRef = useRef<string | null>(null)
+  const lastHydratedSignatureRef = useRef<string | null>(null)
   useEffect(() => {
     if (!activeLayout) return
     if (hydratedRef.current === activeLayout.id && canvasLayoutId === activeLayout.id) return
@@ -370,6 +375,15 @@ function App() {
       activeLayout.placements,
       activeLayout.snap_to_grid,
     )
+    // Snapshot the signature that results from hydration so the sync effect
+    // can compare against it and skip the redundant write-back.
+    queueMicrotask(() => {
+      const state = useCanvasStore.getState()
+      lastHydratedSignatureRef.current = serializePlacementSyncState(
+        state.placedDevices,
+        state.canvasBounds,
+      )
+    })
   }, [activeLayout, canvasLayoutId, hydrateFromLayout])
 
   useEffect(() => {
@@ -476,17 +490,28 @@ function App() {
     syncPlacements,
   ])
 
-  // Debounced placement sync
+  // Debounced placement sync — only syncs when the local state diverges from
+  // what was last hydrated from the backend, preventing a redundant round-trip
+  // that would echo runtime display data back as persisted config.
   const syncTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
     if (!activeLayoutId) return
     if (canvasLayoutId !== activeLayoutId) return
+    // Skip sync when the current state is identical to what we just hydrated
+    // from the backend — nothing has changed locally, so sending it back would
+    // be a no-op at best and a config contamination vector at worst.
+    if (
+      lastHydratedSignatureRef.current != null
+      && committedPlacementSignature === lastHydratedSignatureRef.current
+    ) {
+      return
+    }
     clearTimeout(syncTimerRef.current)
     syncTimerRef.current = setTimeout(() => {
       syncPlacements(activeLayoutId, placedDevices, canvasBounds)
     }, 200)
     return () => clearTimeout(syncTimerRef.current)
-  }, [placedDevices, canvasBounds, activeLayoutId, canvasLayoutId, syncPlacements])
+  }, [placedDevices, canvasBounds, activeLayoutId, canvasLayoutId, syncPlacements, committedPlacementSignature])
 
   // Sync snap_to_grid changes to backend
   const prevSnapRef = useRef(snapToGrid)

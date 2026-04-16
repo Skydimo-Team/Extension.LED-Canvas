@@ -565,6 +565,16 @@ local function normalize_placements(placements, device_lookup)
                     placement.segmentId ~= json.null and placement.segmentId or nil)
             end
 
+            -- Backend authority: ledsCount is derived from the snapshot (the state
+            -- captured when the placement was created/edited), NOT from the frontend-
+            -- supplied value which may carry stale runtime data.  The frontend-
+            -- supplied value is only used as a fallback when no snapshot exists (e.g.
+            -- first-time placement before device info is available).
+            local authoritative_leds_count = leds_count
+            if snapshot and snapshot.ledsCount and snapshot.ledsCount > 0 then
+                authoritative_leds_count = snapshot.ledsCount
+            end
+
             normalized[#normalized + 1] = {
                 id = placement_id,
                 deviceId = device_id,
@@ -577,8 +587,8 @@ local function normalize_placements(placements, device_lookup)
                 width = math.max(1, tonumber(placement.width) or 1),
                 height = math.max(1, tonumber(placement.height) or 1),
                 rotation = normalize_rotation(placement.rotation or placement.angle),
-                ledsCount = leds_count,
-                matrix = normalize_matrix(placement.matrix, leds_count),
+                ledsCount = authoritative_leds_count,
+                matrix = normalize_matrix(placement.matrix, authoritative_leds_count),
                 brightness = sanitize_brightness(placement.brightness),
                 snapshot = snapshot,
             }
@@ -1214,7 +1224,7 @@ local function layout_summary(layout, device_lookup)
             width = placement.width,
             height = placement.height,
             rotation = normalize_rotation(placement.rotation),
-            ledsCount = runtime and runtime.ledsCount or placement.ledsCount,
+            ledsCount = placement.ledsCount,
             matrix = placement.matrix,
             brightness = placement.brightness or 100,
             snapshot = placement.snapshot,
