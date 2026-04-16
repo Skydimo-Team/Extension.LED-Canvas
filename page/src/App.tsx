@@ -1,7 +1,8 @@
 import './App.css'
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp, ScanSearch } from 'lucide-react'
+import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp, ScanSearch, FolderInput } from 'lucide-react'
 import { DeviceTree } from '@/components/DeviceTree'
+import { StudioImportDialog } from '@/components/StudioImport'
 import { LayoutManager } from '@/components/LayoutManager'
 import { VisualGrid } from '@/components/VisualGrid'
 import {
@@ -321,6 +322,7 @@ function App() {
   const previewPlacements = useBridgeStore(s => s.previewPlacements)
   const clearPlacementPreview = useBridgeStore(s => s.clearPlacementPreview)
   const updateSnap = useBridgeStore(s => s.updateSnap)
+  const [studioImportOpen, setStudioImportOpen] = useState(false)
 
   const activeLayout = layouts.find(l => l.id === activeLayoutId) ?? null
   const canvasRegistered = activeLayout?.registered ?? false
@@ -560,6 +562,15 @@ function App() {
           />
         )}
 
+        <button
+          className="h-[40px] px-[14px] rounded-[10px] border border-border bg-secondary hover:bg-accent cursor-pointer transition-colors flex items-center justify-center gap-[6px] text-[13px] font-medium"
+          onClick={() => setStudioImportOpen(true)}
+          title={t('studioImport.title')}
+        >
+          <FolderInput className="size-4" />
+          {t('studioImport.button')}
+        </button>
+
         {/* Spacer */}
         <div className="flex-1" />
 
@@ -658,6 +669,8 @@ function App() {
           </div>
         </div>
       </div>
+
+      <StudioImportDialog open={studioImportOpen} onOpenChange={setStudioImportOpen} />
     </div>
   )
 }

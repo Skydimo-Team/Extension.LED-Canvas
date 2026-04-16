@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import { setLocale } from './i18n'
-import type { Device, LedColor, Output, TreeDevice } from '@/types'
+import type { Device, LedColor, Output, TreeDevice, StudioScanResult, StudioImportResult, StudioResolvedMatch } from '@/types'
 import type { CanvasBounds, PlacedDevice } from './canvasStore'
 
 /* ── Connection info resolution ── */
@@ -108,6 +108,10 @@ interface BridgeState {
   layouts: LayoutInfo[]
   /** Currently active layout id */
   activeLayoutId: string | null
+  /** Studio import scan result */
+  studioScanResult: StudioScanResult | null
+  /** Studio import result */
+  studioImportResult: StudioImportResult | null
 
   connect: () => void
   requestDevices: () => void
@@ -129,6 +133,9 @@ interface BridgeState {
   setVirtualDeviceEffect: (layoutId: string, effectId: string | null) => void
   updateVirtualDeviceEffectParams: (layoutId: string, params: Record<string, unknown>) => void
   resetVirtualDeviceEffectParams: (layoutId: string) => void
+  scanStudioTabs: () => void
+  importStudioTab: (tabSerial: string, name: string, resolvedMatches: StudioResolvedMatch[]) => void
+  clearStudioResults: () => void
   disconnect: () => void
 }
 
@@ -364,6 +371,12 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
           if (data?.type === 'effects_catalog') {
             set({ effects: normalizeEffects((data as Record<string, unknown>).effects) })
           }
+          if (data?.type === 'studio_scan_result') {
+            set({ studioScanResult: data as unknown as StudioScanResult })
+          }
+          if (data?.type === 'studio_import_result') {
+            set({ studioImportResult: data as unknown as StudioImportResult })
+          }
         }
       }
     }
@@ -386,6 +399,8 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     effects: [],
     layouts: [],
     activeLayoutId: null,
+    studioScanResult: null,
+    studioImportResult: null,
 
     connect: doConnect,
 
@@ -481,6 +496,25 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
     resetVirtualDeviceEffectParams(layoutId) {
       sendToExt({ type: 'reset_layout_virtual_effect_params', layout_id: layoutId })
+    },
+
+    scanStudioTabs() {
+      set({ studioScanResult: null, studioImportResult: null })
+      sendToExt({ type: 'scan_studio_tabs' })
+    },
+
+    importStudioTab(tabSerial, name, resolvedMatches) {
+      set({ studioImportResult: null })
+      sendToExt({
+        type: 'import_studio_tab',
+        tab_serial: tabSerial,
+        name,
+        resolved_matches: resolvedMatches,
+      })
+    },
+
+    clearStudioResults() {
+      set({ studioScanResult: null, studioImportResult: null })
     },
 
     disconnect() {

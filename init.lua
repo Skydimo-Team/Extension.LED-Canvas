@@ -674,6 +674,407 @@ local function normalize_config(raw, device_lookup)
     return normalized
 end
 
+-- ── Studio Import Helpers ────────────────────────────────────────────
+
+local function studio_read_json_file(path)
+    local f, err = io.open(path, "r")
+    if not f then return nil, err end
+    local raw = f:read("*a")
+    f:close()
+    if not raw or raw == "" then return nil, "empty file" end
+    local ok, data = pcall(json.decode, raw)
+    if not ok or type(data) ~= "table" then return nil, "invalid json" end
+    return data
+end
+
+--- Parse a Studio member key like "vendor|name|serial::zoneName::seg:N"
+local function parse_member_key(key)
+    if type(key) ~= "string" or key == "" then return nil end
+
+    -- Find "::seg:" from the right
+    local seg_pos = key:find("::seg:", 1, true)
+    if not seg_pos then return nil end
+
+    local left = key:sub(1, seg_pos - 1)
+    local seg_str = key:sub(seg_pos + 6) -- after "::seg:"
+    local segment_index = tonumber(seg_str) or -1
+
+    -- Split left by first "::" to get deviceKey and zoneName
+    local sep = left:find("::", 1, true)
+    if not sep then return nil end
+
+    local device_key = left:sub(1, sep - 1)
+    local zone_name = left:sub(sep + 2)
+
+    -- Split deviceKey by "|"
+    local vendor, name, serial = device_key:match("^([^|]*)|([^|]*)|(.*)$")
+    if not vendor then
+        vendor = ""
+        name = device_key
+        serial = ""
+    end
+
+    return {
+        device_key = device_key,
+        vendor = vendor,
+        name = name,
+        serial = serial,
+        zone_name = zone_name,
+        segment_index = segment_index,
+    }
+end
+
+--- Scan the Studio directory for saved tab JSON files.
+local function scan_studio_directory(dir_path)
+    local tabs = {}
+    local handle = io.popen('dir /b "' .. dir_path .. '" 2>nul')
+    if not handle then return tabs end
+
+    for line in handle:lines() do
+        if line:match("%.json$") then
+            local file_path = dir_path .. "\\" .. line
+            local data, err = studio_read_json_file(file_path)
+            if data then
+                data._filename = line:gsub("%.json$", "")
+                tabs[#tabs + 1] = data
+            else
+                ext.log("studio import: skipping " .. line .. ": " .. tostring(err))
+            end
+        end
+    end
+    handle:close()
+    return tabs
+end
+
+--- Score how well an old deviceKey matches a current device.
+local function score_device_match(old_vendor, old_name, old_serial, device)
+    local score = 0
+
+    local dev_serial = tostring(device.serial_id or "")
+    local dev_name = tostring(device.name or ""):lower()
+    local dev_model = tostring(device.model or ""):lower()
+    local dev_id = tostring(device.id or "")
+
+    -- Serial match (strongest signal)
+    if old_serial ~= "" and dev_serial ~= "" then
+        if old_serial == dev_serial then
+            score = score + 100
+        elseif dev_serial:find(old_serial, 1, true) or old_serial:find(dev_serial, 1, true) then
+            score = score + 50
+        end
+    end
+    -- Also check serial in deviceId (format: manufacturer-model-serial)
+    if old_serial ~= "" and score < 50 then
+        local id_serial = dev_id:match("[^%-]+%-[^%-]+%-(.+)$")
+        if id_serial and id_serial ~= "" then
+            if old_serial == id_serial then
+                score = score + 100
+            elseif id_serial:find(old_serial, 1, true) or old_serial:find(id_serial, 1, true) then
+                score = score + 50
+            end
+        end
+    end
+
+    -- Name/model match
+    local old_name_lower = old_name:lower()
+    if old_name_lower ~= "" then
+        if old_name_lower == dev_name or old_name_lower == dev_model then
+            score = score + 40
+        elseif dev_name:find(old_name_lower, 1, true) or old_name_lower:find(dev_name, 1, true) then
+            score = score + 20
+        elseif dev_model ~= "" and (dev_model:find(old_name_lower, 1, true) or old_name_lower:find(dev_model, 1, true)) then
+            score = score + 20
+        end
+    end
+
+    -- Vendor match (weak signal)
+    if old_vendor ~= "" then
+        local dev_vendor = tostring(device.manufacturer or ""):lower()
+        if dev_vendor ~= "" and old_vendor:lower() == dev_vendor then
+            score = score + 10
+        end
+    end
+
+    return score
+end
+
+--- Match old zones to outputs in a matched device.
+local function match_zones_to_outputs(zones, device, overrides_map)
+    local outputs = type(device.outputs) == "table" and device.outputs or {}
+    local results = {}
+
+    for _, zone in ipairs(zones) do
+        local parsed = parse_member_key(zone.key)
+        if not parsed then goto continue_zone end
+
+        local zone_name = parsed.zone_name
+        local seg_idx = parsed.segment_index
+
+        -- Build output candidates
+        local output_candidates = {}
+        for _, output in ipairs(outputs) do
+            output_candidates[#output_candidates + 1] = {
+                output_id = output.id,
+                output_name = output.name or output.id,
+                segments = type(output.segments) == "table" and output.segments or {},
+                leds_count = sanitize_non_negative_int(output.leds_count, 0),
+            }
+        end
+
+        -- Auto-match output
+        local auto_output = nil
+        local auto_segment_id = nil
+
+        if #outputs == 1 then
+            -- Only one output: auto-match
+            auto_output = outputs[1]
+        else
+            -- Try name matching
+            local best_output = nil
+            local best_match_type = 0 -- 0=none, 1=partial, 2=exact
+            for _, output in ipairs(outputs) do
+                local out_name = (output.name or ""):lower()
+                local z_name = zone_name:lower()
+                if out_name == z_name then
+                    best_output = output
+                    best_match_type = 2
+                    break
+                elseif best_match_type < 1 and (out_name:find(z_name, 1, true) or z_name:find(out_name, 1, true)) then
+                    best_output = output
+                    best_match_type = 1
+                end
+            end
+            if best_output then
+                auto_output = best_output
+            end
+        end
+
+        -- Resolve segment
+        if auto_output then
+            local segments = type(auto_output.segments) == "table" and auto_output.segments or {}
+            if seg_idx == -1 then
+                -- Whole zone → if output has exactly 1 segment, associate with it
+                if #segments == 1 then
+                    auto_segment_id = segments[1].id
+                end
+            else
+                -- Specific segment by index
+                if segments[seg_idx + 1] then
+                    auto_segment_id = segments[seg_idx + 1].id
+                end
+            end
+        end
+
+        -- Compute old LED count from overrides
+        local old_leds_count = 0
+        local override = type(overrides_map) == "table" and overrides_map[zone.key] or nil
+        if type(override) == "table" then
+            for led_idx_str, _ in pairs(override) do
+                local idx = tonumber(led_idx_str)
+                if idx and idx >= old_leds_count then
+                    old_leds_count = idx + 1
+                end
+            end
+        end
+
+        -- New LED count from matched output/segment
+        local new_leds_count = 0
+        if auto_output then
+            if auto_segment_id and type(auto_output.segments) == "table" then
+                for _, seg in ipairs(auto_output.segments) do
+                    if seg.id == auto_segment_id then
+                        new_leds_count = sanitize_non_negative_int(seg.leds_count, 0)
+                        break
+                    end
+                end
+            else
+                new_leds_count = sanitize_non_negative_int(auto_output.leds_count, 0)
+            end
+        end
+
+        results[#results + 1] = {
+            member_key = zone.key,
+            zone_name = zone_name,
+            segment_index = seg_idx,
+            output_candidates = output_candidates,
+            auto_match_output = auto_output and {
+                output_id = auto_output.id,
+                segment_id = auto_segment_id,
+            } or nil,
+            old_leds_count = old_leds_count,
+            new_leds_count = new_leds_count,
+            brightness = zone.brightness or 100,
+        }
+
+        ::continue_zone::
+    end
+
+    return results
+end
+
+--- Match Studio tab devices to current devices.
+local function match_studio_to_devices(studio_tab, current_devices)
+    local zones_data = type(studio_tab.zones_data) == "table" and studio_tab.zones_data or {}
+    local overrides_map = type(studio_tab.overrides) == "table" and studio_tab.overrides or {}
+
+    -- Group zones by deviceKey
+    local device_zones = {} -- deviceKey → { zones }
+    local device_keys_order = {} -- preserve order
+    local seen_keys = {}
+
+    for _, zone in ipairs(zones_data) do
+        local dk = zone.deviceKey or ""
+        if dk ~= "" then
+            if not seen_keys[dk] then
+                seen_keys[dk] = true
+                device_keys_order[#device_keys_order + 1] = dk
+                device_zones[dk] = {}
+            end
+            device_zones[dk][#device_zones[dk] + 1] = zone
+        end
+    end
+
+    local results = {}
+    for _, old_device_key in ipairs(device_keys_order) do
+        local parsed = parse_member_key(old_device_key .. "::_::seg:-1")
+        local vendor = parsed and parsed.vendor or ""
+        local name = parsed and parsed.name or old_device_key
+        local serial = parsed and parsed.serial or ""
+
+        -- Score all current devices
+        local candidates = {}
+        for _, device in ipairs(current_devices) do
+            local s = score_device_match(vendor, name, serial, device)
+            if s > 0 then
+                candidates[#candidates + 1] = {
+                    device_id = device.id,
+                    score = s,
+                    device_name = device.name or device.id,
+                    serial_id = device.serial_id or "",
+                }
+            end
+        end
+
+        -- Sort by score descending
+        table.sort(candidates, function(a, b) return a.score > b.score end)
+
+        -- Determine auto-match
+        local auto_match = nil
+        if #candidates == 1 then
+            auto_match = candidates[1]
+        elseif #candidates > 1 and candidates[1].score >= 50 then
+            -- Only auto-match if top score is significantly better than second
+            if candidates[1].score > candidates[2].score then
+                auto_match = candidates[1]
+            end
+        end
+
+        -- Match zones to outputs if device matched
+        local matched_device = nil
+        if auto_match then
+            for _, device in ipairs(current_devices) do
+                if device.id == auto_match.device_id then
+                    matched_device = device
+                    break
+                end
+            end
+        end
+
+        local zone_matches = {}
+        if matched_device then
+            zone_matches = match_zones_to_outputs(device_zones[old_device_key], matched_device, overrides_map)
+        else
+            -- Return zones without output matching
+            for _, zone in ipairs(device_zones[old_device_key]) do
+                local p = parse_member_key(zone.key)
+                zone_matches[#zone_matches + 1] = {
+                    member_key = zone.key,
+                    zone_name = p and p.zone_name or "?",
+                    segment_index = p and p.segment_index or -1,
+                    output_candidates = {},
+                    auto_match_output = nil,
+                    old_leds_count = 0,
+                    new_leds_count = 0,
+                    brightness = zone.brightness or 100,
+                }
+            end
+        end
+
+        results[#results + 1] = {
+            old_device_key = old_device_key,
+            vendor = vendor,
+            name = name,
+            serial = serial,
+            candidates = candidates,
+            auto_match = auto_match,
+            zones = zone_matches,
+        }
+    end
+
+    return results
+end
+
+--- Convert Studio overrides to a led_canvas matrix and placement position.
+--- Returns: matrix_or_nil, placement_x, placement_y, led_count
+local function convert_overrides_to_matrix(member_key, overrides_map, zone_position)
+    local override = type(overrides_map) == "table" and overrides_map[member_key] or nil
+    if type(override) ~= "table" or next(override) == nil then
+        return nil, nil, nil, 0
+    end
+
+    local min_x, min_y = math.huge, math.huge
+    local max_x, max_y = -math.huge, -math.huge
+    local max_led_idx = -1
+
+    for led_idx_str, pos in pairs(override) do
+        if type(pos) == "table" then
+            local x = tonumber(pos.x) or 0
+            local y = tonumber(pos.y) or 0
+            min_x = math.min(min_x, x)
+            min_y = math.min(min_y, y)
+            max_x = math.max(max_x, x)
+            max_y = math.max(max_y, y)
+            local idx = tonumber(led_idx_str)
+            if idx and idx > max_led_idx then
+                max_led_idx = idx
+            end
+        end
+    end
+
+    if max_led_idx < 0 then return nil, nil, nil, 0 end
+
+    local matrix_w = max_x - min_x + 1
+    local matrix_h = max_y - min_y + 1
+    local total_cells = matrix_w * matrix_h
+    local map = {}
+    for i = 1, total_cells do
+        map[i] = EMPTY_MATRIX_CELL
+    end
+
+    for led_idx_str, pos in pairs(override) do
+        local led_idx = tonumber(led_idx_str)
+        if led_idx and type(pos) == "table" then
+            local col = math.floor((tonumber(pos.x) or 0) - min_x)
+            local row = math.floor((tonumber(pos.y) or 0) - min_y)
+            local cell_index = row * matrix_w + col + 1 -- 1-based Lua
+            if cell_index >= 1 and cell_index <= total_cells then
+                map[cell_index] = led_idx
+            end
+        end
+    end
+
+    local grid_x = (zone_position and zone_position.gridX or 0) + min_x
+    local grid_y = (zone_position and zone_position.gridY or 0) + min_y
+
+    return {
+        width = matrix_w,
+        height = matrix_h,
+        map = map,
+    }, grid_x, grid_y, max_led_idx + 1
+end
+
+-- ── End Studio Import Helpers ────────────────────────────────────────
+
 --- Build a flat identity matrix map: { 0, 1, 2, ... }.
 local function identity_matrix_map(width, height)
     local map = {}
@@ -1578,6 +1979,200 @@ function P.on_page_message(msg)
         if layout then
             with_virtual_device_rollback(layout, function() return reset_layout_virtual_effect_params(layout) end)
         end
+
+    -- ── Studio Import: scan for saved tabs ──
+    elseif msg.type == "scan_studio_tabs" then
+        local appdata = os.getenv("LOCALAPPDATA")
+        if not appdata or appdata == "" then
+            ext.page_emit({ type = "studio_scan_result", tabs = {}, error = "no_appdata" })
+            return
+        end
+        local studio_dir = appdata .. "\\SkyDimo\\studio"
+
+        local raw_tabs = scan_studio_directory(studio_dir)
+        if #raw_tabs == 0 then
+            -- Check if directory itself exists
+            local test = io.open(studio_dir .. "\\.", "r")
+            local err_code = test and "no_tabs" or "no_studio_dir"
+            if test then test:close() end
+            ext.page_emit({ type = "studio_scan_result", tabs = {}, error = err_code, path = studio_dir })
+            return
+        end
+
+        local devices = ext.get_devices()
+        local filtered = filter_devices_for_page(devices)
+
+        local tab_results = {}
+        for _, tab in ipairs(raw_tabs) do
+            local zones_data = type(tab.zones_data) == "table" and tab.zones_data or {}
+            local device_matches = match_studio_to_devices(tab, filtered)
+            tab_results[#tab_results + 1] = {
+                tab_serial = tab.tab_serial or tab._filename or "",
+                name = tab.name or tab.tab_serial or tab._filename or "Studio",
+                zones_count = #zones_data,
+                device_matches = device_matches,
+                has_overrides = type(tab.overrides) == "table" and next(tab.overrides) ~= nil,
+            }
+        end
+
+        ext.page_emit({
+            type = "studio_scan_result",
+            tabs = tab_results,
+            devices = filtered,
+            path = studio_dir,
+        })
+
+    -- ── Studio Import: execute import ──
+    elseif msg.type == "import_studio_tab" then
+        local appdata = os.getenv("LOCALAPPDATA")
+        if not appdata or appdata == "" then
+            ext.page_emit({ type = "studio_import_result", success = false, error = "no_appdata" })
+            return
+        end
+
+        local tab_serial = msg.tab_serial
+        if type(tab_serial) ~= "string" or tab_serial == "" then
+            ext.page_emit({ type = "studio_import_result", success = false, error = "no_tab_serial" })
+            return
+        end
+
+        local studio_dir = appdata .. "\\SkyDimo\\studio"
+        local tab_path = studio_dir .. "\\" .. tab_serial .. ".json"
+        local tab, read_err = studio_read_json_file(tab_path)
+        if not tab then
+            ext.page_emit({ type = "studio_import_result", success = false, error = "file_not_found", detail = tostring(read_err) })
+            return
+        end
+
+        -- Build resolved matches lookup
+        local resolved = {}
+        for _, match in ipairs(msg.resolved_matches or {}) do
+            if type(match) == "table" and type(match.member_key) == "string" then
+                resolved[match.member_key] = match
+            end
+        end
+
+        local device_lookup = get_device_lookup()
+        local overrides_map = type(tab.overrides) == "table" and tab.overrides or {}
+        local zone_positions = type(tab.zone_positions) == "table" and tab.zone_positions or {}
+        local zones_data = type(tab.zones_data) == "table" and tab.zones_data or {}
+
+        local placements = {}
+        for _, zone in ipairs(zones_data) do
+            local member_key = zone.key
+            local match = resolved[member_key]
+            if not match then goto continue_import_zone end
+
+            local position = zone_positions[member_key]
+            -- Also use zone's gridX/gridY as fallback position
+            if not position then
+                position = { gridX = zone.gridX or 0, gridY = zone.gridY or 0 }
+            end
+
+            local matrix, px, py, override_led_count = convert_overrides_to_matrix(
+                member_key, overrides_map, position
+            )
+
+            -- Build snapshot from current device state
+            local snapshot = build_snapshot_from_device(
+                device_lookup, match.device_id, match.output_id,
+                match.segment_id ~= json.null and match.segment_id or nil
+            )
+
+            if not matrix then
+                -- No override: use zone position directly
+                px = position.gridX or 0
+                py = position.gridY or 0
+
+                -- For zones without overrides, use the device's native matrix
+                -- so Matrix-type devices preserve their 2D LED layout on the canvas.
+                if snapshot and snapshot.matrix then
+                    matrix = clone_value(snapshot.matrix)
+                end
+            end
+
+            local actual_leds = 0
+            if snapshot then
+                actual_leds = snapshot.ledsCount
+            elseif override_led_count > 0 then
+                actual_leds = override_led_count
+            end
+
+            -- Width/height from matrix or snapshot
+            local width, height
+            if matrix then
+                width = matrix.width
+                height = matrix.height
+            else
+                -- Fallback: linear strip
+                width = math.max(actual_leds, 1)
+                height = 1
+            end
+
+            placements[#placements + 1] = {
+                deviceId = match.device_id,
+                outputId = match.output_id,
+                segmentId = match.segment_id ~= json.null and match.segment_id or nil,
+                x = math.floor(px),
+                y = math.floor(py),
+                width = math.max(1, width),
+                height = math.max(1, height),
+                rotation = 0,
+                ledsCount = actual_leds,
+                matrix = matrix,
+                brightness = zone.brightness or 100,
+                snapshot = snapshot,
+            }
+
+            ::continue_import_zone::
+        end
+
+        if #placements == 0 then
+            ext.page_emit({ type = "studio_import_result", success = false, error = "no_placements" })
+            return
+        end
+
+        -- Calculate canvas bounds
+        local min_x, min_y = math.huge, math.huge
+        local max_x, max_y = -math.huge, -math.huge
+        for _, p in ipairs(placements) do
+            min_x = math.min(min_x, p.x)
+            min_y = math.min(min_y, p.y)
+            max_x = math.max(max_x, p.x + p.width)
+            max_y = math.max(max_y, p.y + p.height)
+        end
+
+        -- Normalize placements relative to canvas origin
+        for _, p in ipairs(placements) do
+            p.x = p.x - min_x
+            p.y = p.y - min_y
+        end
+
+        local new_id = generate_layout_id(collect_layout_ids(config.layouts))
+        local new_layout = normalize_layout({
+            id = new_id,
+            name = sanitize_layout_name(msg.name or tab.name, "Studio Import"),
+            canvas = {
+                width = math.max(1, max_x - min_x),
+                height = math.max(1, max_y - min_y),
+                x = 0,
+                y = 0,
+            },
+            placements = placements,
+            registered = false,
+            snap_to_grid = false,
+        }, collect_layout_ids(config.layouts), device_lookup)
+
+        config.layouts[#config.layouts + 1] = new_layout
+        config.active_layout_id = new_layout.id
+        save_config()
+        emit_full_state()
+
+        ext.page_emit({
+            type = "studio_import_result",
+            success = true,
+            layout_id = new_layout.id,
+        })
 
     -- ── Legacy: get_canvas_status → emit full state ──
     elseif msg.type == "get_canvas_status" then
