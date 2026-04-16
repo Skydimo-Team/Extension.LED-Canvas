@@ -7,7 +7,6 @@ Thumbs.db
 *.log
 
 README.md
-index.html
 
 page/.gitignore
 page/index.html

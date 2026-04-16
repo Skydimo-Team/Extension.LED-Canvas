@@ -14,6 +14,7 @@
   "canvas.registered": "畫布裝置：已註冊",
   "canvas.unregistered": "畫布裝置：未註冊",
   "canvas.deactivate": "停用畫布",
+  "canvas.autoFit": "自動貼合畫框",
   "canvas.register": "註冊裝置",
   "canvas.help.ariaLabel": "LED畫布說明",
   "canvas.help.description": "LED畫布可以讓多個裝置的燈珠註冊為一個虛擬裝置，來實現更統一的燈光效果。雙擊裝置進入燈珠編輯後仍可拖動畫布，按住 Ctrl 可多選燈珠，Ctrl+Z 可復原編輯。",

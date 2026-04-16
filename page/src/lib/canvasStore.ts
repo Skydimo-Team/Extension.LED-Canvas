@@ -122,6 +122,7 @@ const MIN_CANVAS_SIDE = 1
 const TEMPORAL_LIMIT = 50
 const PLACEMENT_ID_LENGTH = 9
 const PLACEMENT_ID_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+const BOUNDS_ROUNDING_EPSILON = 1e-6
 const DEFAULT_CANVAS_BOUNDS: CanvasBounds = {
   x: 0,
   y: 0,
@@ -162,6 +163,139 @@ function computeDefaultSize(ledsCount: number, matrix: Matrix | null): { width: 
   }
   if (ledsCount <= 0) return { width: 1, height: 1 }
   return { width: ledsCount, height: 1 }
+}
+
+interface LocalCellBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function buildOccupiedDeviceCells(
+  device: Pick<PlacedDevice, 'width' | 'height' | 'ledsCount' | 'matrix'>,
+): LocalCellBounds[] {
+  const width = Math.max(MIN_CANVAS_SIDE, Math.abs(device.width) || MIN_CANVAS_SIDE)
+  const height = Math.max(MIN_CANVAS_SIDE, Math.abs(device.height) || MIN_CANVAS_SIDE)
+  const cells: LocalCellBounds[] = []
+  const matrix = device.matrix
+
+  if (matrix && matrix.width > 0 && matrix.height > 0) {
+    const cellW = width / matrix.width
+    const cellH = height / matrix.height
+    const totalCells = Math.max(0, matrix.width * matrix.height)
+
+    for (let offset = 0; offset < totalCells; offset += 1) {
+      const ledIndex = matrix.map[offset]
+      if (typeof ledIndex !== 'number' || ledIndex < 0) continue
+
+      const col = offset % matrix.width
+      const row = Math.floor(offset / matrix.width)
+      cells.push({
+        x: col * cellW,
+        y: row * cellH,
+        width: cellW,
+        height: cellH,
+      })
+    }
+  } else {
+    const cols = Math.max(0, Math.floor(device.ledsCount))
+    if (cols > 0) {
+      const cellW = width / cols
+      for (let col = 0; col < cols; col += 1) {
+        cells.push({
+          x: col * cellW,
+          y: 0,
+          width: cellW,
+          height,
+        })
+      }
+    }
+  }
+
+  return cells.length > 0
+    ? cells
+    : [{ x: 0, y: 0, width, height }]
+}
+
+function rotatePointAroundCenter(
+  x: number,
+  y: number,
+  centerX: number,
+  centerY: number,
+  cos: number,
+  sin: number,
+) {
+  const dx = x - centerX
+  const dy = y - centerY
+  return {
+    x: centerX + dx * cos - dy * sin,
+    y: centerY + dx * sin + dy * cos,
+  }
+}
+
+function roundCanvasMin(value: number) {
+  return Math.floor(value + BOUNDS_ROUNDING_EPSILON)
+}
+
+function roundCanvasMax(value: number) {
+  return Math.ceil(value - BOUNDS_ROUNDING_EPSILON)
+}
+
+export function computeAutoFitCanvasBounds(placedDevices: readonly PlacedDevice[]): CanvasBounds | null {
+  if (placedDevices.length === 0) return null
+
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+
+  for (const device of placedDevices) {
+    const occupiedCells = buildOccupiedDeviceCells(device)
+    const centerX = device.x + device.width / 2
+    const centerY = device.y + device.height / 2
+    const normalizedRotation = ((device.rotation ?? 0) % 360 + 360) % 360
+    const radians = normalizedRotation * (Math.PI / 180)
+    const cos = Math.cos(radians)
+    const sin = Math.sin(radians)
+    const shouldRotate = Math.abs(normalizedRotation) > BOUNDS_ROUNDING_EPSILON
+
+    for (const cell of occupiedCells) {
+      const corners = [
+        { x: device.x + cell.x, y: device.y + cell.y },
+        { x: device.x + cell.x + cell.width, y: device.y + cell.y },
+        { x: device.x + cell.x + cell.width, y: device.y + cell.y + cell.height },
+        { x: device.x + cell.x, y: device.y + cell.y + cell.height },
+      ]
+
+      for (const corner of corners) {
+        const point = shouldRotate
+          ? rotatePointAroundCenter(corner.x, corner.y, centerX, centerY, cos, sin)
+          : corner
+
+        minX = Math.min(minX, point.x)
+        minY = Math.min(minY, point.y)
+        maxX = Math.max(maxX, point.x)
+        maxY = Math.max(maxY, point.y)
+      }
+    }
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null
+  }
+
+  const left = roundCanvasMin(minX)
+  const top = roundCanvasMin(minY)
+  const right = Math.max(left + MIN_CANVAS_SIDE, roundCanvasMax(maxX))
+  const bottom = Math.max(top + MIN_CANVAS_SIDE, roundCanvasMax(maxY))
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  }
 }
 
 function buildSequentialMatrix(ledsCount: number): Matrix | null {

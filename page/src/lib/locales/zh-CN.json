@@ -14,6 +14,7 @@
   "canvas.registered": "画布设备：已注册",
   "canvas.unregistered": "画布设备：未注册",
   "canvas.deactivate": "停用画布",
+  "canvas.autoFit": "自动贴合画框",
   "canvas.register": "注册设备",
   "canvas.help.ariaLabel": "LED画布说明",
   "canvas.help.description": "LED画布可以让多个设备的灯珠注册为一个虚拟设备，来实现更统一的灯光效果。双击设备进入灯珠编辑后仍可拖动画布，按住 Ctrl 可多选灯珠，Ctrl+Z 可撤回编辑。",

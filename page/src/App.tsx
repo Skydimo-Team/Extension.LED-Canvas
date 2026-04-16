@@ -1,6 +1,6 @@
 import './App.css'
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp } from 'lucide-react'
+import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp, ScanSearch } from 'lucide-react'
 import { DeviceTree } from '@/components/DeviceTree'
 import { LayoutManager } from '@/components/LayoutManager'
 import { VisualGrid } from '@/components/VisualGrid'
@@ -10,6 +10,7 @@ import {
   beginCanvasHistoryBatch,
   endCanvasHistoryBatch,
   buildEditedPlacedDevice,
+  computeAutoFitCanvasBounds,
   type CanvasBounds,
   type PlacedDevice,
 } from '@/lib/canvasStore'
@@ -30,6 +31,13 @@ function parseGridSize(value: string): number | null {
   const n = Number(text)
   if (!Number.isFinite(n) || n <= 0) return null
   return Math.max(1, Math.round(n))
+}
+
+function sameCanvasBounds(a: CanvasBounds, b: CanvasBounds) {
+  return a.x === b.x
+    && a.y === b.y
+    && a.width === b.width
+    && a.height === b.height
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -319,6 +327,13 @@ function App() {
   const canvasWidth = Math.max(1, Math.round(canvasBounds.width))
   const canvasHeight = Math.max(1, Math.round(canvasBounds.height))
   const previewSyncRef = useRef<{ layoutId: string; signature: string } | null>(null)
+  const autoFitCanvasBounds = useMemo(
+    () => computeAutoFitCanvasBounds(placedDevices),
+    [placedDevices],
+  )
+  const canAutoFitCanvas = autoFitCanvasBounds != null
+    && !sameCanvasBounds(canvasBounds, autoFitCanvasBounds)
+    && !editingDeviceId
 
   const editingPreviewDevices = useMemo(() => {
     if (!editingDeviceId || !editingMatrix) return null
@@ -491,6 +506,15 @@ function App() {
     }
   }, [activeLayoutId, canvasRegistered, canvasWidth, canvasHeight, registerCanvas, unregisterCanvas])
 
+  const handleAutoFitCanvas = useCallback(() => {
+    if (!autoFitCanvasBounds || editingDeviceId) return
+    if (sameCanvasBounds(canvasBounds, autoFitCanvasBounds)) return
+
+    beginCanvasHistoryBatch()
+    updateCanvasBounds(autoFitCanvasBounds)
+    endCanvasHistoryBatch()
+  }, [autoFitCanvasBounds, canvasBounds, editingDeviceId, updateCanvasBounds])
+
   return (
     <div className="relative h-screen w-screen p-[10px] flex flex-col gap-[10px] overflow-hidden">
       {/* ── Top bar: layout selector (left) + controls (right) ── */}
@@ -533,16 +557,17 @@ function App() {
         />
         <button
           className={cn(
-            'h-[40px] px-[14px] rounded-[10px] border cursor-pointer transition-colors flex items-center justify-center gap-[6px] text-[13px] font-medium',
-            canvasRegistered
-              ? 'bg-primary text-primary-foreground border-primary'
-              : 'bg-secondary border-border hover:bg-accent',
+            'h-[40px] px-[14px] rounded-[10px] border cursor-pointer transition-colors flex items-center justify-center gap-[6px] text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-60',
+            canAutoFitCanvas
+              ? 'bg-secondary border-border hover:bg-accent'
+              : 'bg-secondary/80 border-border',
           )}
-          onClick={handleToggleRegister}
-          title={canvasRegistered ? t('canvas.registered') : t('canvas.unregistered')}
+          onClick={handleAutoFitCanvas}
+          disabled={!canAutoFitCanvas}
+          title={t('canvas.autoFit')}
         >
-          <FilePlus2 className="size-4" />
-          {canvasRegistered ? t('canvas.deactivate') : t('canvas.register')}
+          <ScanSearch className="size-4" />
+          {t('canvas.autoFit')}
         </button>
         <button
           className={cn(
@@ -555,6 +580,19 @@ function App() {
           title={snapToGrid ? t('snap.on') : t('snap.off')}
         >
           <Magnet className="size-4" />
+        </button>
+        <button
+          className={cn(
+            'h-[40px] px-[14px] rounded-[10px] border cursor-pointer transition-colors flex items-center justify-center gap-[6px] text-[13px] font-medium',
+            canvasRegistered
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-secondary border-border hover:bg-accent',
+          )}
+          onClick={handleToggleRegister}
+          title={canvasRegistered ? t('canvas.registered') : t('canvas.unregistered')}
+        >
+          <FilePlus2 className="size-4" />
+          {canvasRegistered ? t('canvas.deactivate') : t('canvas.register')}
         </button>
       </div>
 
