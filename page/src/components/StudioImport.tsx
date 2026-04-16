@@ -273,7 +273,7 @@ function ZoneMatchRow({
         {zone.old_leds_count > 0 && zone.new_leds_count > 0 && zone.old_leds_count !== zone.new_leds_count && (
           <span className="flex items-center gap-1 text-[10px] text-orange-500">
             <AlertTriangle className="size-3" />
-            {zone.old_leds_count} → {zone.new_leds_count}
+            {t('studioImport.ledMismatch.expected').replace('{expected}', String(zone.old_leds_count)).replace('{actual}', String(zone.new_leds_count))}
           </span>
         )}
       </div>
@@ -287,52 +287,107 @@ function LedMismatchStep({
   onRefresh,
   refreshing,
 }: {
-  mismatches: Array<{ zoneName: string; deviceName: string; oldCount: number; newCount: number }>
+  mismatches: Array<{
+    zoneName: string
+    deviceName: string
+    deviceId: string
+    outputName: string
+    outputCount: number
+    oldCount: number
+    newCount: number
+    memberKey: string
+  }>
   onRefresh: () => void
   refreshing: boolean
 }) {
   useLocale()
 
+  const resolved = mismatches.length === 0
+
+  // Group mismatches by deviceId
+  const grouped = useMemo(() => {
+    const map = new Map<string, {
+      deviceName: string
+      items: Array<{ outputName: string; oldCount: number; newCount: number; outputCount: number }>
+    }>()
+    for (const m of mismatches) {
+      let entry = map.get(m.deviceId)
+      if (!entry) {
+        entry = { deviceName: m.deviceName, items: [] }
+        map.set(m.deviceId, entry)
+      }
+      entry.items.push({
+        outputName: m.outputName,
+        oldCount: m.oldCount,
+        newCount: m.newCount,
+        outputCount: m.outputCount,
+      })
+    }
+    return [...map.values()]
+  }, [mismatches])
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-4">
-        <div className="flex items-start gap-2">
-          <AlertTriangle className="size-5 text-orange-500 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-orange-600">{t('studioImport.ledMismatch.title')}</p>
-            <p className="text-xs text-muted-foreground mt-1">{t('studioImport.ledMismatch.guide')}</p>
+      {resolved ? (
+        /* Success state — all mismatches resolved */
+        <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4">
+          <div className="flex items-start gap-2">
+            <Check className="size-5 text-green-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-green-600">{t('studioImport.ledMismatch.resolved.title')}</p>
+              <p className="text-xs text-muted-foreground mt-1">{t('studioImport.ledMismatch.resolved.guide')}</p>
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* Mismatch table */}
-      <div className="rounded-lg border border-border/60 overflow-hidden">
-        <div className="grid grid-cols-[1fr_1fr_60px_60px] gap-2 px-3 py-1.5 bg-muted/30 text-[10px] text-muted-foreground font-medium">
-          <span>{t('studioImport.newDevice')}</span>
-          <span>{t('studioImport.zone')}</span>
-          <span className="text-right">Studio</span>
-          <span className="text-right">{t('studioImport.ledCount')}</span>
-        </div>
-        {mismatches.map((m, i) => (
-          <div key={i} className="grid grid-cols-[1fr_1fr_60px_60px] gap-2 px-3 py-1.5 text-xs border-t border-border/30">
-            <span className="truncate">{m.deviceName}</span>
-            <span className="truncate">{m.zoneName}</span>
-            <span className="text-right text-orange-500 font-medium">{m.oldCount}</span>
-            <span className="text-right">{m.newCount}</span>
+      ) : (
+        <>
+          {/* Warning banner */}
+          <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="size-5 text-orange-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-orange-600">{t('studioImport.ledMismatch.title')}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('studioImport.ledMismatch.guide')}</p>
+              </div>
+            </div>
           </div>
-        ))}
-      </div>
 
-      {/* Steps guide */}
-      <div className="space-y-2 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground/80">{t('studioImport.ledMismatch.stepsTitle')}</p>
-        <ol className="list-decimal pl-4 space-y-1">
-          <li>{t('studioImport.ledMismatch.step1')}</li>
-          <li>{t('studioImport.ledMismatch.step2')}</li>
-          <li>{t('studioImport.ledMismatch.step3')}</li>
-          <li>{t('studioImport.ledMismatch.step4')}</li>
-        </ol>
-      </div>
+          {/* Grouped device mismatch list */}
+          <div className="space-y-3">
+            {grouped.map((group, gi) => (
+              <div key={gi} className="rounded-lg border border-border/60 px-3 py-2.5">
+                <p className="text-xs font-medium">{group.deviceName}</p>
+                <div className="mt-1.5 space-y-1">
+                  {group.items.map((item, ii) => {
+                    const adjustText = t('studioImport.ledMismatch.adjustLeds')
+                      .replace('{from}', String(item.newCount))
+                      .replace('{to}', String(item.oldCount))
+                    return (
+                      <p key={ii} className="text-xs text-muted-foreground pl-3">
+                        {item.outputCount > 1 ? (
+                          <><span className="text-foreground/70">"{item.outputName}"</span> {adjustText}</>
+                        ) : (
+                          adjustText
+                        )}
+                      </p>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Steps guide */}
+          <div className="space-y-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground/80">{t('studioImport.ledMismatch.stepsTitle')}</p>
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>{t('studioImport.ledMismatch.step1')}</li>
+              <li>{t('studioImport.ledMismatch.step2')}</li>
+              <li>{t('studioImport.ledMismatch.step3')}</li>
+            </ol>
+          </div>
+        </>
+      )}
 
       <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} className="self-start">
         <RefreshCw className={cn('size-3.5 mr-1.5', refreshing && 'animate-spin')} />
@@ -498,7 +553,16 @@ export function StudioImportDialog({
   // Compute LED mismatches
   const ledMismatches = useMemo(() => {
     if (!selectedTab) return []
-    const mismatches: Array<{ zoneName: string; deviceName: string; oldCount: number; newCount: number; memberKey: string }> = []
+    const mismatches: Array<{
+      zoneName: string
+      deviceName: string
+      deviceId: string
+      outputName: string
+      outputCount: number
+      oldCount: number
+      newCount: number
+      memberKey: string
+    }> = []
 
     for (const dm of selectedTab.device_matches) {
       for (const zone of dm.zones) {
@@ -518,10 +582,19 @@ export function StudioImportDialog({
           if (seg) currentLeds = seg.leds_count ?? 0
         }
 
+        // Count how many outputs/segments are resolved for this device
+        const deviceOutputCount = dm.zones.filter(z => {
+          const r = resolutions.get(z.member_key)
+          return r && r.deviceId === res.deviceId && r.outputId
+        }).length
+
         if (zone.old_leds_count > 0 && currentLeds > 0 && zone.old_leds_count !== currentLeds) {
           mismatches.push({
             zoneName: zone.zone_name,
             deviceName: device.name ?? device.id,
+            deviceId: res.deviceId,
+            outputName: output.name ?? output.id,
+            outputCount: deviceOutputCount,
             oldCount: zone.old_leds_count,
             newCount: currentLeds,
             memberKey: zone.member_key,
@@ -672,13 +745,20 @@ export function StudioImportDialog({
             </Button>
           )}
           {step === 'leds' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setStep('confirm')}
-            >
-              {t('studioImport.ledMismatch.forceImport')}
-            </Button>
+            ledMismatches.length === 0 ? (
+              <Button size="sm" onClick={() => setStep('confirm')}>
+                {t('studioImport.next')}
+                <ArrowRight className="size-3.5 ml-1" />
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setStep('confirm')}
+              >
+                {t('studioImport.ledMismatch.forceImport')}
+              </Button>
+            )
           )}
           {step === 'confirm' && (
             <Button size="sm" onClick={handleImport} disabled={importing || resolvedCount === 0}>
