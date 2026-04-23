@@ -77,6 +77,20 @@ body {
   min-width: 320px;
 }
 
+body,
+body * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+[contenteditable="plaintext-only"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 h1 {
   font-size: 3.2em;
   line-height: 1.1;
