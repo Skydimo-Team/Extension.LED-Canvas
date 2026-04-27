@@ -11,6 +11,9 @@ import { useSyncExternalStore } from 'react'
 import enUS from './locales/en-US.json'
 import zhCN from './locales/zh-CN.json'
 import zhTW from './locales/zh-TW.json'
+import de from './locales/de.json'
+import fr from './locales/fr.json'
+import es from './locales/es.json'
 import ru from './locales/ru.json'
 import tr from './locales/tr.json'
 
@@ -20,6 +23,9 @@ const bundles: Record<string, Messages> = {
   'en-US': enUS,
   'zh-CN': zhCN,
   'zh-TW': zhTW,
+  'de': de,
+  'fr': fr,
+  'es': es,
   'ru': ru,
   'tr': tr,
 }
