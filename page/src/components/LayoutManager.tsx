@@ -1,6 +1,18 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Plus, RotateCcw, X } from 'lucide-react'
-import { ScrollArea } from 'radix-ui'
+import {
+  Box,
+  Button,
+  HStack,
+  IconButton,
+  Input,
+  NativeSelect,
+  ScrollArea,
+  Slider,
+  Switch,
+  Text,
+  VStack,
+} from '@chakra-ui/react'
 import {
   useBridgeStore,
   type EffectInfo,
@@ -9,7 +21,6 @@ import {
   type LocalizedText,
 } from '@/lib/bridge'
 import { t, useLocale } from '@/lib/i18n'
-import { cn } from '@/lib/utils'
 
 type VisibleParamEntry = {
   param: EffectParamInfo
@@ -125,25 +136,18 @@ function SettingSwitch({
   onToggle: () => void
 }) {
   return (
-    <button
-      type="button"
+    <Switch.Root
       disabled={disabled}
-      className={cn(
-        'relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60',
-        checked
-          ? 'border-primary bg-primary/90'
-          : 'border-border bg-secondary',
-      )}
-      onClick={onToggle}
-      aria-pressed={checked}
+      checked={checked}
+      size="sm"
+      onCheckedChange={onToggle}
     >
-      <span
-        className={cn(
-          'block size-[16px] rounded-full bg-white shadow-sm transition-transform',
-          checked ? 'translate-x-[18px]' : 'translate-x-[2px]',
-        )}
-      />
-    </button>
+      <Switch.HiddenInput />
+      <Switch.Control>
+        <Switch.Thumb />
+      </Switch.Control>
+      <Switch.Label />
+    </Switch.Root>
   )
 }
 
@@ -159,22 +163,27 @@ function BasicSettingRow({
   disabled?: boolean
 }) {
   return (
-    <div className={cn(
-      'flex items-center gap-3 px-3 py-2.5 border-b border-foreground/[0.05] last:border-b-0',
-      disabled && 'opacity-55',
-    )}>
-      <div className="min-w-0 flex-1">
-        <div className="text-[12px] text-foreground/85">{label}</div>
+    <HStack
+      gap="3"
+      px="3"
+      py="2.5"
+      borderBottomWidth="1px"
+      borderColor="border.subtle"
+      opacity={disabled ? 0.55 : 1}
+      _last={{ borderBottomWidth: 0 }}
+    >
+      <Box minW="0" flex="1">
+        <Text textStyle="xs" color="fg">{label}</Text>
         {hint ? (
-          <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+          <Text mt="0.5" textStyle="2xs" color="fg.muted">
             {hint}
-          </div>
+          </Text>
         ) : null}
-      </div>
-      <div className="shrink-0 w-[152px] max-w-[56%]">
+      </Box>
+      <Box flexShrink={0} w="152px" maxW="56%">
         {control}
-      </div>
-    </div>
+      </Box>
+    </HStack>
   )
 }
 
@@ -192,7 +201,6 @@ function EffectParamField({
   onChange: (nextValue: unknown) => void
 }) {
   const label = resolveLocalizedText(param.label, locale) || param.key
-  const commonClass = 'h-[32px] w-full rounded-[8px] border border-border bg-secondary px-2 text-[12px] text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-60'
   const syncedValue = useMemo(() => cloneValue(value), [value])
   const [draftValue, setDraftValue] = useState<unknown>(() => syncedValue)
   const [isInteracting, setIsInteracting] = useState(false)
@@ -226,24 +234,6 @@ function EffectParamField({
     onChange(resolvedValue)
   }, [onChange])
 
-  useEffect(() => {
-    if (!isInteracting || (param.type !== 'slider' && param.type !== 'range_slider')) {
-      return
-    }
-
-    const handlePointerRelease = () => {
-      commitDeferredValue()
-    }
-
-    window.addEventListener('pointerup', handlePointerRelease)
-    window.addEventListener('pointercancel', handlePointerRelease)
-
-    return () => {
-      window.removeEventListener('pointerup', handlePointerRelease)
-      window.removeEventListener('pointercancel', handlePointerRelease)
-    }
-  }, [commitDeferredValue, isInteracting, param.type])
-
   // Toggle type uses horizontal BasicSettingRow layout
   if (param.type === 'toggle') {
     return (
@@ -251,13 +241,13 @@ function EffectParamField({
         label={label}
         disabled={disabled}
         control={(
-          <div className="flex justify-end">
+          <HStack justify="flex-end">
             <SettingSwitch
               checked={value === true}
               disabled={disabled}
               onToggle={() => onChange(value !== true)}
             />
-          </div>
+          </HStack>
         )}
       />
     )
@@ -272,33 +262,35 @@ function EffectParamField({
       const step = normalizeNumber(param.step, 1)
       const numericValue = Math.min(max, Math.max(min, normalizeNumber(resolvedValue, min)))
       control = (
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            className="w-full accent-[var(--primary)]"
+        <HStack gap="2">
+          <Slider.Root
+            flex="1"
             min={min}
             max={max}
             step={step}
-            value={numericValue}
+            value={[numericValue]}
             disabled={disabled}
+            aria-label={[label]}
             onPointerDown={startInteraction}
-            onChange={e => {
+            onValueChange={e => {
               setIsInteracting(true)
-              setDraftValue(Number(e.target.value))
+              setDraftValue(e.value[0])
             }}
-            onKeyUp={e => {
-              const targetValue = Number((e.target as HTMLInputElement).value)
-              commitDeferredValue(targetValue)
+            onValueChangeEnd={e => {
+              commitDeferredValue(e.value[0])
             }}
-            onBlur={e => {
-              const targetValue = Number(e.target.value)
-              commitDeferredValue(targetValue)
-            }}
-          />
-          <span className="w-[52px] shrink-0 text-right text-[11px] text-muted-foreground/80 tabular-nums">
+          >
+            <Slider.Control>
+              <Slider.Track>
+                <Slider.Range />
+              </Slider.Track>
+              <Slider.Thumbs />
+            </Slider.Control>
+          </Slider.Root>
+          <Text w="52px" flexShrink={0} textAlign="right" textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
             {formatNumber(numericValue, step)}
-          </span>
-        </div>
+          </Text>
+        </HStack>
       )
       break
     }
@@ -310,66 +302,35 @@ function EffectParamField({
       const [start, end] = normalizeRangeValue(param, resolvedValue)
 
       control = (
-        <div className="grid gap-2">
-          <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-            <span className="text-[10px] text-muted-foreground/70">{t('layoutManager.rangeMin')}</span>
-            <input
-              type="range"
-              className="w-full accent-[var(--primary)]"
-              min={min}
-              max={max}
-              step={step}
-              value={start}
-              disabled={disabled}
-              onPointerDown={startInteraction}
-              onChange={e => {
-                setIsInteracting(true)
-                const nextStart = Math.min(Number(e.target.value), end)
-                setDraftValue([nextStart, end])
-              }}
-              onKeyUp={e => {
-                const nextStart = Math.min(Number((e.target as HTMLInputElement).value), end)
-                commitDeferredValue([nextStart, end])
-              }}
-              onBlur={e => {
-                const nextStart = Math.min(Number(e.target.value), end)
-                commitDeferredValue([nextStart, end])
-              }}
-            />
-            <span className="w-[52px] text-right text-[11px] text-muted-foreground/80 tabular-nums">
-              {formatNumber(start, step)}
-            </span>
-          </div>
-          <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
-            <span className="text-[10px] text-muted-foreground/70">{t('layoutManager.rangeMax')}</span>
-            <input
-              type="range"
-              className="w-full accent-[var(--primary)]"
-              min={min}
-              max={max}
-              step={step}
-              value={end}
-              disabled={disabled}
-              onPointerDown={startInteraction}
-              onChange={e => {
-                setIsInteracting(true)
-                const nextEnd = Math.max(Number(e.target.value), start)
-                setDraftValue([start, nextEnd])
-              }}
-              onKeyUp={e => {
-                const nextEnd = Math.max(Number((e.target as HTMLInputElement).value), start)
-                commitDeferredValue([start, nextEnd])
-              }}
-              onBlur={e => {
-                const nextEnd = Math.max(Number(e.target.value), start)
-                commitDeferredValue([start, nextEnd])
-              }}
-            />
-            <span className="w-[52px] text-right text-[11px] text-muted-foreground/80 tabular-nums">
-              {formatNumber(end, step)}
-            </span>
-          </div>
-        </div>
+        <VStack align="stretch" gap="2">
+          <Slider.Root
+            min={min}
+            max={max}
+            step={step}
+            value={[start, end]}
+            disabled={disabled}
+            aria-label={[t('layoutManager.rangeMin'), t('layoutManager.rangeMax')]}
+            onPointerDown={startInteraction}
+            onValueChange={e => {
+              setIsInteracting(true)
+              setDraftValue(e.value)
+            }}
+            onValueChangeEnd={e => {
+              commitDeferredValue(e.value)
+            }}
+          >
+            <Slider.Control>
+              <Slider.Track>
+                <Slider.Range />
+              </Slider.Track>
+              <Slider.Thumbs />
+            </Slider.Control>
+          </Slider.Root>
+          <HStack justify="space-between" textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
+            <Text>{t('layoutManager.rangeMin')}: {formatNumber(start, step)}</Text>
+            <Text>{t('layoutManager.rangeMax')}: {formatNumber(end, step)}</Text>
+          </HStack>
+        </VStack>
       )
       break
     }
@@ -378,18 +339,19 @@ function EffectParamField({
       const options = Array.isArray(param.options) ? param.options : []
       const currentValue = serializeOptionValue(value)
       control = (
-        <select
-          className={commonClass}
-          value={currentValue}
-          disabled={disabled}
-          onChange={e => onChange(parseOptionValue(e.target.value))}
-        >
-          {options.map((option, index) => (
-            <option key={`${param.key}-${index}`} value={serializeOptionValue(option.value)}>
-              {resolveLocalizedText(option.label, locale) || String(option.value)}
-            </option>
-          ))}
-        </select>
+        <NativeSelect.Root size="sm" disabled={disabled}>
+          <NativeSelect.Field
+            value={currentValue}
+            onChange={e => onChange(parseOptionValue(e.currentTarget.value))}
+          >
+            {options.map((option, index) => (
+              <option key={`${param.key}-${index}`} value={serializeOptionValue(option.value)}>
+                {resolveLocalizedText(option.label, locale) || String(option.value)}
+              </option>
+            ))}
+          </NativeSelect.Field>
+          <NativeSelect.Indicator />
+        </NativeSelect.Root>
       )
       break
     }
@@ -397,18 +359,22 @@ function EffectParamField({
     case 'color': {
       const color = normalizeColor(value)
       control = (
-        <div className="flex items-center gap-2">
-          <input
+        <HStack gap="2">
+          <Input
             type="color"
-            className="h-[32px] w-[44px] rounded-[8px] border border-border bg-secondary p-1 disabled:cursor-not-allowed disabled:opacity-60"
+            h="32px"
+            w="44px"
+            p="1"
             value={color}
             disabled={disabled}
             onChange={e => onChange(e.target.value)}
           />
-          <div className="flex-1 rounded-[8px] border border-border bg-secondary px-2 py-[7px] text-[11px] text-muted-foreground/80 tabular-nums">
+          <Box flex="1" rounded="var(--radius-m)" borderWidth="1px" borderColor="border" bg="bg.muted" px="2" py="1.5">
+            <Text textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
             {color.toUpperCase()}
-          </div>
-        </div>
+            </Text>
+          </Box>
+        </HStack>
       )
       break
     }
@@ -422,12 +388,14 @@ function EffectParamField({
       const canRemove = (count: number) => !disabled && fixedCount == null && count > minCount
 
       control = (
-        <div className="grid gap-2">
+        <VStack align="stretch" gap="2">
           {colors.map((color, index) => (
-            <div key={`${param.key}-${index}`} className="flex items-center gap-2">
-              <input
+            <HStack key={`${param.key}-${index}`} gap="2">
+              <Input
                 type="color"
-                className="h-[32px] w-[44px] rounded-[8px] border border-border bg-secondary p-1 disabled:cursor-not-allowed disabled:opacity-60"
+                h="32px"
+                w="44px"
+                p="1"
                 value={color}
                 disabled={disabled}
                 onChange={e => {
@@ -436,12 +404,15 @@ function EffectParamField({
                   onChange(next)
                 }}
               />
-              <div className="flex-1 rounded-[8px] border border-border bg-secondary px-2 py-[7px] text-[11px] text-muted-foreground/80 tabular-nums">
-                {color.toUpperCase()}
-              </div>
-              <button
-                type="button"
-                className="size-[28px] rounded-[8px] border border-border bg-secondary hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors cursor-pointer"
+              <Box flex="1" rounded="var(--radius-m)" borderWidth="1px" borderColor="border" bg="bg.muted" px="2" py="1.5">
+                <Text textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
+                  {color.toUpperCase()}
+                </Text>
+              </Box>
+              <IconButton
+                aria-label={t('layoutManager.removeColor')}
+                size="xs"
+                variant="surface"
                 disabled={!canRemove(colors.length)}
                 onClick={() => {
                   const next = colors.filter((_, colorIndex) => colorIndex !== index)
@@ -449,39 +420,41 @@ function EffectParamField({
                 }}
                 title={t('layoutManager.removeColor')}
               >
-                <X className="size-3.5 text-muted-foreground" />
-              </button>
-            </div>
+                <X size={14} />
+              </IconButton>
+            </HStack>
           ))}
           {canAdd ? (
-            <button
-              type="button"
-              className="h-[30px] rounded-[8px] border border-dashed border-border bg-secondary/60 hover:bg-accent text-[11px] text-muted-foreground flex items-center justify-center gap-1 transition-colors cursor-pointer"
+            <Button
+              h="30px"
+              size="xs"
+              variant="outline"
+              borderStyle="dashed"
               onClick={() => onChange([...colors, '#ffffff'])}
             >
-              <Plus className="size-3" />
+              <Plus size={12} />
               {t('layoutManager.addColor')}
-            </button>
+            </Button>
           ) : null}
-        </div>
+        </VStack>
       )
       break
     }
 
     default: {
       control = (
-        <div className="rounded-[8px] border border-dashed border-border bg-secondary/60 px-2 py-[7px] text-[11px] text-muted-foreground/70">
-          {t('layoutManager.unsupported')}
-        </div>
+        <Box rounded="var(--radius-m)" borderWidth="1px" borderStyle="dashed" borderColor="border" bg="bg.muted" px="2" py="1.5">
+          <Text textStyle="2xs" color="fg.muted">{t('layoutManager.unsupported')}</Text>
+        </Box>
       )
     }
   }
 
   return (
-    <div className={cn('px-3 py-2.5', disabled && 'opacity-65')}>
-      <div className="mb-2 text-[12px] text-foreground/85">{label}</div>
+    <Box px="3" py="2.5" opacity={disabled ? 0.65 : 1}>
+      <Text mb="2" textStyle="xs" color="fg">{label}</Text>
       {control}
-    </div>
+    </Box>
   )
 }
 
@@ -549,36 +522,31 @@ export function LayoutManager() {
     : t('layoutManager.status.unregistered')
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 h-[36px] border-b border-foreground/[0.06] shrink-0">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 flex-1">
+    <VStack align="stretch" gap="0" h="full">
+      <HStack gap="2" px="3" h="36px" borderBottomWidth="1px" borderColor="border.subtle" flexShrink={0}>
+        <Text textStyle="2xs" fontWeight="semibold" textTransform="uppercase" color="fg.muted" flex="1">
           {t('layoutManager.panel')}
-        </span>
-        <span
-          className={cn(
-            'size-1.5 rounded-full shrink-0',
-            isRegistered ? 'bg-emerald-500' : 'bg-muted-foreground/25',
-          )}
-          title={panelStatusTitle}
-        />
-      </div>
+        </Text>
+        <Box boxSize="1.5" rounded="full" flexShrink={0} bg={isRegistered ? 'green.500' : 'fg.muted'} opacity={isRegistered ? 1 : 0.25} title={panelStatusTitle} />
+      </HStack>
 
-      <ScrollArea.Root className="flex-1 overflow-hidden">
-        <ScrollArea.Viewport className="h-full w-full [&>div]:!block">
+      <ScrollArea.Root flex="1" overflow="hidden" size="xs">
+        <ScrollArea.Viewport h="full" w="full">
+          <ScrollArea.Content>
           {!activeLayout ? (
-            <div className="flex items-center justify-center h-full min-h-[80px]">
-              <span className="text-[12px] text-muted-foreground/40">
+            <HStack justify="center" h="full" minH="80px">
+              <Text textStyle="xs" color="fg.muted" opacity={0.4}>
                 {t('layoutManager.noLayout')}
-              </span>
-            </div>
+              </Text>
+            </HStack>
           ) : (
-            <div className="py-1">
-              <div className="mx-1 rounded-[6px] overflow-hidden border border-foreground/[0.04] bg-foreground/[0.02]">
+            <Box py="1">
+              <Box mx="1" rounded="var(--radius-s)" overflow="hidden" borderWidth="1px" borderColor="border.subtle" bg="bg.subtle">
                 <BasicSettingRow
                   label={t('layoutManager.power')}
                   disabled={!isRegistered}
                   control={(
-                    <div className="flex justify-end">
+                    <HStack justify="flex-end">
                       <SettingSwitch
                         checked={activeLayout.virtual_device.power_on}
                         disabled={!isRegistered}
@@ -587,14 +555,14 @@ export function LayoutManager() {
                           !activeLayout.virtual_device.power_on,
                         )}
                       />
-                    </div>
+                    </HStack>
                   )}
                 />
                 <BasicSettingRow
                   label={t('layoutManager.paused')}
                   disabled={!isRegistered}
                   control={(
-                    <div className="flex justify-end">
+                    <HStack justify="flex-end">
                       <SettingSwitch
                         checked={activeLayout.virtual_device.paused}
                         disabled={!isRegistered}
@@ -603,68 +571,76 @@ export function LayoutManager() {
                           !activeLayout.virtual_device.paused,
                         )}
                       />
-                    </div>
+                    </HStack>
                   )}
                 />
                 <BasicSettingRow
                   label={t('layoutManager.effect')}
                   disabled={!isRegistered}
                   control={(
-                    <select
-                      className="h-[32px] w-full rounded-[8px] border border-border bg-secondary px-2 text-[12px] text-foreground outline-none"
-                      value={activeLayout.virtual_device.effect_id ?? ''}
-                      disabled={!isRegistered}
-                      onChange={e => setVirtualDeviceEffect(activeLayout.id, e.target.value || null)}
-                    >
-                      <option value="">{t('layoutManager.effect.none')}</option>
-                      {sortedEffects.map((effect: EffectInfo) => (
-                        <option key={effect.id} value={effect.id}>
-                          {resolveLocalizedText(effect.name, locale) || effect.id}
-                        </option>
-                      ))}
-                    </select>
+                    <NativeSelect.Root size="sm" disabled={!isRegistered}>
+                      <NativeSelect.Field
+                        value={activeLayout.virtual_device.effect_id ?? ''}
+                        onChange={e => setVirtualDeviceEffect(activeLayout.id, e.currentTarget.value || null)}
+                      >
+                        <option value="">{t('layoutManager.effect.none')}</option>
+                        {sortedEffects.map((effect: EffectInfo) => (
+                          <option key={effect.id} value={effect.id}>
+                            {resolveLocalizedText(effect.name, locale) || effect.id}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator />
+                    </NativeSelect.Root>
                   )}
                 />
-              </div>
+              </Box>
 
-              <div className={cn(
-                'mx-1 mt-2 rounded-[6px] overflow-hidden border border-foreground/[0.04] bg-foreground/[0.02]',
-                !isRegistered && 'opacity-55',
-              )}>
-                <div className="flex items-center gap-2 px-3 py-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 flex-1">
+              <Box
+                mx="1"
+                mt="2"
+                rounded="var(--radius-s)"
+                overflow="hidden"
+                borderWidth="1px"
+                borderColor="border.subtle"
+                bg="bg.subtle"
+                opacity={isRegistered ? 1 : 0.55}
+              >
+                <HStack gap="2" px="3" py="2">
+                  <Text textStyle="2xs" fontWeight="semibold" textTransform="uppercase" color="fg.muted" flex="1">
                     {t('layoutManager.effectSettings')}
-                  </span>
+                  </Text>
                   {selectedEffect ? (
-                    <button
-                      type="button"
-                      className="size-6 rounded-[4px] hover:bg-foreground/[0.06] disabled:hover:bg-transparent disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors cursor-pointer"
+                    <IconButton
+                      aria-label={t('layoutManager.reset')}
+                      size="2xs"
+                      variant="ghost"
                       disabled={!isRegistered}
                       onClick={() => resetVirtualDeviceEffectParams(activeLayout.id)}
                       title={t('layoutManager.reset')}
                     >
-                      <RotateCcw className="size-3 text-muted-foreground/60" />
-                    </button>
+                      <RotateCcw size={12} />
+                    </IconButton>
                   ) : null}
-                </div>
+                </HStack>
 
                 {!selectedEffect ? (
-                  <div className="px-3 pb-3 text-[12px] text-muted-foreground/55">
+                  <Text px="3" pb="3" textStyle="xs" color="fg.muted" opacity={0.55}>
                     {sortedEffects.length === 0
                       ? t('layoutManager.noEffects')
                       : t('layoutManager.noEffectSelected')}
-                  </div>
+                  </Text>
                 ) : visibleParams.length === 0 ? (
-                  <div className="px-3 pb-3 text-[12px] text-muted-foreground/55">
+                  <Text px="3" pb="3" textStyle="xs" color="fg.muted" opacity={0.55}>
                     {t('layoutManager.noSettings')}
-                  </div>
+                  </Text>
                 ) : (
                   visibleParams.map(({ param, disabled, groupLabel, showGroup }) => (
                     <Fragment key={param.key}>
                       {showGroup && groupLabel ? (
-                        <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/55">
+                        <Text px="3" pt="3" pb="1" fontSize="10px" fontWeight="semibold" textTransform="uppercase" color="fg.muted" opacity={0.55}>
                           {groupLabel}
-                        </div>
+                        </Text>
                       ) : null}
                       <EffectParamField
                         param={param}
@@ -681,17 +657,15 @@ export function LayoutManager() {
                     </Fragment>
                   ))
                 )}
-              </div>
-            </div>
+              </Box>
+            </Box>
           )}
+          </ScrollArea.Content>
         </ScrollArea.Viewport>
-        <ScrollArea.Scrollbar
-          orientation="vertical"
-          className="flex touch-none select-none p-px transition-opacity duration-150 data-[state=hidden]:opacity-0 data-[state=visible]:opacity-100 w-1.5"
-        >
-          <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/10 hover:bg-foreground/20 transition-colors" />
+        <ScrollArea.Scrollbar orientation="vertical">
+          <ScrollArea.Thumb />
         </ScrollArea.Scrollbar>
       </ScrollArea.Root>
-    </div>
+    </VStack>
   )
 }

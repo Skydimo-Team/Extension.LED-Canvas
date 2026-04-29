@@ -10,7 +10,18 @@ import {
   ArrowRight,
   Download,
 } from 'lucide-react'
-import { ScrollArea } from 'radix-ui'
+import {
+  Box,
+  Button,
+  Dialog,
+  HStack,
+  Input,
+  NativeSelect,
+  Portal,
+  ScrollArea,
+  Text,
+  VStack,
+} from '@chakra-ui/react'
 import { useBridgeStore } from '@/lib/bridge'
 import type { TreeDevice } from '@/types'
 import type {
@@ -19,15 +30,6 @@ import type {
   StudioZoneMatch,
   StudioResolvedMatch,
 } from '@/types'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { t, useLocale } from '@/lib/i18n'
 
 type Step = 'select' | 'match' | 'leds' | 'confirm'
@@ -55,38 +57,42 @@ function TabSelectStep({
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
-        <FolderOpen className="size-10 text-muted-foreground/30" />
-        <p className="text-sm text-muted-foreground">{t('studioImport.noTabs')}</p>
+      <VStack gap="3" py="8" textAlign="center">
+        <FolderOpen size={40} color="var(--text-secondary)" opacity={0.35} />
+        <Text textStyle="sm" color="fg.muted">{t('studioImport.noTabs')}</Text>
         {path && (
-          <p className="text-xs text-muted-foreground/60 max-w-[380px] break-all">
+          <Text textStyle="xs" color="fg.muted" maxW="380px" wordBreak="break-all">
             {t('studioImport.noTabsHint').replace('{path}', path)}
-          </p>
+          </Text>
         )}
-      </div>
+      </VStack>
     )
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-sm text-muted-foreground mb-2">{t('studioImport.selectTab')}</p>
+    <VStack align="stretch" gap="1">
+      <Text textStyle="sm" color="fg.muted" mb="2">{t('studioImport.selectTab')}</Text>
       {tabs.map(tab => (
-        <button
+        <Button
           key={tab.tab_serial}
-          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg border border-border/50 hover:bg-accent/50 cursor-pointer transition-colors text-left"
+          variant="surface"
+          justifyContent="space-between"
+          h="auto"
+          px="3"
+          py="2.5"
           onClick={() => onSelect(tab)}
         >
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{tab.name}</p>
-            <p className="text-xs text-muted-foreground">
+          <Box flex="1" minW="0" textAlign="left">
+            <Text textStyle="sm" fontWeight="medium" truncate>{tab.name}</Text>
+            <Text textStyle="xs" color="fg.muted">
               {t('studioImport.zones').replace('{n}', String(tab.zones_count))}
               {tab.has_overrides && ` · ${t('studioImport.hasOverrides')}`}
-            </p>
-          </div>
-          <ChevronRight className="size-4 text-muted-foreground/50 shrink-0" />
-        </button>
+            </Text>
+          </Box>
+          <ChevronRight size={16} />
+        </Button>
       ))}
-    </div>
+    </VStack>
   )
 }
 
@@ -107,8 +113,8 @@ function DeviceMatchStep({
   useLocale()
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted-foreground">{t('studioImport.matchDevices')}</p>
+    <VStack align="stretch" gap="3">
+      <Text textStyle="sm" color="fg.muted">{t('studioImport.matchDevices')}</Text>
       {tab.device_matches.map(dm => (
         <DeviceMatchBlock
           key={dm.old_device_key}
@@ -119,7 +125,7 @@ function DeviceMatchStep({
           onOutputChange={onOutputChange}
         />
       ))}
-    </div>
+    </VStack>
   )
 }
 
@@ -152,48 +158,60 @@ function DeviceMatchBlock({
   const hasMatch = !!matchedDevice
 
   return (
-    <div className="rounded-lg border border-border/60 overflow-hidden">
-      {/* Device header */}
-      <div
-        className="flex items-center gap-2 px-3 py-2 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
+    <Box rounded="var(--radius-m)" borderWidth="1px" borderColor="border.subtle" overflow="hidden">
+      <HStack
+        gap="2"
+        px="3"
+        py="2"
+        bg="bg.subtle"
+        cursor="pointer"
+        transition="background 160ms ease"
+        _hover={{ bg: 'bg.muted' }}
         onClick={() => setOpen(o => !o)}
       >
-        <ChevronRight className={cn('size-3.5 text-muted-foreground/60 transition-transform', open && 'rotate-90')} />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium truncate">{dm.name}{dm.serial ? ` (${dm.serial})` : ''}</p>
-          <p className="text-[10px] text-muted-foreground/60 truncate">{dm.old_device_key}</p>
-        </div>
+        <Box
+          as={ChevronRight}
+          boxSize="3.5"
+          color="fg.muted"
+          opacity={0.6}
+          transition="transform 150ms ease"
+          transform={open ? 'rotate(90deg)' : 'rotate(0deg)'}
+        />
+        <Box flex="1" minW="0">
+          <Text textStyle="xs" fontWeight="medium" truncate>{dm.name}{dm.serial ? ` (${dm.serial})` : ''}</Text>
+          <Text fontSize="10px" color="fg.muted" opacity={0.6} truncate>{dm.old_device_key}</Text>
+        </Box>
         {hasMatch ? (
-          <span className="flex items-center gap-1 text-[10px] text-green-600 shrink-0">
-            <Check className="size-3" />
+          <HStack gap="1" fontSize="10px" color="green.600" flexShrink={0}>
+            <Box as={Check} boxSize="3" />
             {matchedDevice?.name ?? currentDeviceId}
-          </span>
+          </HStack>
         ) : (
-          <span className="flex items-center gap-1 text-[10px] text-orange-500 shrink-0">
-            <AlertTriangle className="size-3" />
+          <HStack gap="1" fontSize="10px" color="orange.500" flexShrink={0}>
+            <Box as={AlertTriangle} boxSize="3" />
             {t('studioImport.noMatch')}
-          </span>
+          </HStack>
         )}
-      </div>
+      </HStack>
 
       {open && (
-        <div className="px-3 py-2 space-y-2">
-          {/* Device selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground shrink-0">{t('studioImport.newDevice')}:</span>
-            <select
-              className="flex-1 h-7 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-              value={currentDeviceId ?? ''}
-              onChange={e => onDeviceChange(dm.old_device_key, e.target.value)}
-            >
-              <option value="">{t('studioImport.selectDevice')}</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>{d.name ?? d.id}{d.serial_id ? ` (${d.serial_id})` : ''}</option>
-              ))}
-            </select>
-          </div>
+        <VStack align="stretch" gap="2" px="3" py="2">
+          <HStack gap="2">
+            <Text fontSize="11px" color="fg.muted" flexShrink={0}>{t('studioImport.newDevice')}:</Text>
+            <NativeSelect.Root size="xs" flex="1">
+              <NativeSelect.Field
+                value={currentDeviceId ?? ''}
+                onChange={e => onDeviceChange(dm.old_device_key, e.currentTarget.value)}
+              >
+                <option value="">{t('studioImport.selectDevice')}</option>
+                {devices.map(d => (
+                  <option key={d.id} value={d.id}>{d.name ?? d.id}{d.serial_id ? ` (${d.serial_id})` : ''}</option>
+                ))}
+              </NativeSelect.Field>
+              <NativeSelect.Indicator />
+            </NativeSelect.Root>
+          </HStack>
 
-          {/* Zone-Output mapping */}
           {matchedDevice && dm.zones.map(zone => (
             <ZoneMatchRow
               key={zone.member_key}
@@ -203,9 +221,9 @@ function DeviceMatchBlock({
               onOutputChange={onOutputChange}
             />
           ))}
-        </div>
+        </VStack>
       )}
-    </div>
+    </Box>
   )
 }
 
@@ -240,44 +258,48 @@ function ZoneMatchRow({
   const segments = matchedOutput?.segments ?? []
 
   return (
-    <div className="pl-4 border-l-2 border-border/30 ml-1 space-y-1">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[10px] text-muted-foreground/70 shrink-0">{zone.zone_name}</span>
-        <span className="text-[10px] text-muted-foreground/40">→</span>
-        <select
-          className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:ring-1 focus:ring-ring min-w-[120px]"
-          value={resolution?.outputId ?? ''}
-          onChange={e => handleOutputChange(e.target.value)}
-        >
-          <option value="">{t('studioImport.selectOutput')}</option>
-          {outputs.map(o => (
-            <option key={o.id} value={o.id}>{o.name ?? o.id} ({o.leds_count ?? '?'})</option>
-          ))}
-        </select>
+    <Box pl="4" borderLeftWidth="2px" borderColor="border.subtle" ml="1">
+      <HStack gap="2" flexWrap="wrap">
+        <Text fontSize="10px" color="fg.muted" opacity={0.7} flexShrink={0}>{zone.zone_name}</Text>
+        <Text fontSize="10px" color="fg.muted" opacity={0.4}>→</Text>
+        <NativeSelect.Root size="xs" minW="120px" w="auto">
+          <NativeSelect.Field
+            value={resolution?.outputId ?? ''}
+            onChange={e => handleOutputChange(e.currentTarget.value)}
+          >
+            <option value="">{t('studioImport.selectOutput')}</option>
+            {outputs.map(o => (
+              <option key={o.id} value={o.id}>{o.name ?? o.id} ({o.leds_count ?? '?'})</option>
+            ))}
+          </NativeSelect.Field>
+          <NativeSelect.Indicator />
+        </NativeSelect.Root>
 
         {/* Segment selector (only if output has multiple segments) */}
         {segments.length > 1 && (
-          <select
-            className="h-6 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:ring-1 focus:ring-ring min-w-[100px]"
-            value={resolution?.segmentId ?? ''}
-            onChange={e => handleSegmentChange(e.target.value)}
-          >
-            <option value="">{t('studioImport.segment')}...</option>
-            {segments.map(s => (
-              <option key={s.id} value={s.id}>{s.name ?? s.id} ({s.leds_count ?? '?'})</option>
-            ))}
-          </select>
+          <NativeSelect.Root size="xs" minW="100px" w="auto">
+            <NativeSelect.Field
+              value={resolution?.segmentId ?? ''}
+              onChange={e => handleSegmentChange(e.currentTarget.value)}
+            >
+              <option value="">{t('studioImport.segment')}...</option>
+              {segments.map(s => (
+                <option key={s.id} value={s.id}>{s.name ?? s.id} ({s.leds_count ?? '?'})</option>
+              ))}
+            </NativeSelect.Field>
+            <NativeSelect.Indicator />
+          </NativeSelect.Root>
         )}
 
         {/* LED count mismatch indicator */}
         {zone.old_leds_count > 0 && zone.new_leds_count > 0 && zone.old_leds_count !== zone.new_leds_count && (
-          <span className="flex items-center gap-1 text-[10px] text-orange-500">
-            <AlertTriangle className="size-3" />
+          <HStack gap="1" fontSize="10px" color="orange.500">
+            <Box as={AlertTriangle} boxSize="3" />
             {t('studioImport.ledMismatch.expected').replace('{expected}', String(zone.old_leds_count)).replace('{actual}', String(zone.new_leds_count))}
-          </span>
+          </HStack>
         )}
-      </div>
-    </div>
+      </HStack>
+    </Box>
   )
 }
 
@@ -327,73 +349,69 @@ function LedMismatchStep({
   }, [mismatches])
 
   return (
-    <div className="flex flex-col gap-4">
+    <VStack align="stretch" gap="4">
       {resolved ? (
-        /* Success state — all mismatches resolved */
-        <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4">
-          <div className="flex items-start gap-2">
-            <Check className="size-5 text-green-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-green-600">{t('studioImport.ledMismatch.resolved.title')}</p>
-              <p className="text-xs text-muted-foreground mt-1">{t('studioImport.ledMismatch.resolved.guide')}</p>
-            </div>
-          </div>
-        </div>
+        <Box rounded="var(--radius-m)" borderWidth="1px" borderColor="green.500/30" bg="green.500/5" p="4">
+          <HStack align="start" gap="2">
+            <Box as={Check} boxSize="5" color="green.600" flexShrink={0} mt="0.5" />
+            <Box>
+              <Text textStyle="sm" fontWeight="medium" color="green.600">{t('studioImport.ledMismatch.resolved.title')}</Text>
+              <Text mt="1" textStyle="xs" color="fg.muted">{t('studioImport.ledMismatch.resolved.guide')}</Text>
+            </Box>
+          </HStack>
+        </Box>
       ) : (
         <>
-          {/* Warning banner */}
-          <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-4">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="size-5 text-orange-500 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-orange-600">{t('studioImport.ledMismatch.title')}</p>
-                <p className="text-xs text-muted-foreground mt-1">{t('studioImport.ledMismatch.guide')}</p>
-              </div>
-            </div>
-          </div>
+          <Box rounded="var(--radius-m)" borderWidth="1px" borderColor="orange.500/30" bg="orange.500/5" p="4">
+            <HStack align="start" gap="2">
+              <Box as={AlertTriangle} boxSize="5" color="orange.500" flexShrink={0} mt="0.5" />
+              <Box>
+                <Text textStyle="sm" fontWeight="medium" color="orange.600">{t('studioImport.ledMismatch.title')}</Text>
+                <Text mt="1" textStyle="xs" color="fg.muted">{t('studioImport.ledMismatch.guide')}</Text>
+              </Box>
+            </HStack>
+          </Box>
 
-          {/* Grouped device mismatch list */}
-          <div className="space-y-3">
+          <VStack align="stretch" gap="3">
             {grouped.map((group, gi) => (
-              <div key={gi} className="rounded-lg border border-border/60 px-3 py-2.5">
-                <p className="text-xs font-medium">{group.deviceName}</p>
-                <div className="mt-1.5 space-y-1">
+              <Box key={gi} rounded="var(--radius-m)" borderWidth="1px" borderColor="border.subtle" px="3" py="2.5">
+                <Text textStyle="xs" fontWeight="medium">{group.deviceName}</Text>
+                <VStack align="stretch" gap="1" mt="1.5">
                   {group.items.map((item, ii) => {
                     const adjustText = t('studioImport.ledMismatch.adjustLeds')
                       .replace('{from}', String(item.newCount))
                       .replace('{to}', String(item.oldCount))
                     return (
-                      <p key={ii} className="text-xs text-muted-foreground pl-3">
+                      <Text key={ii} textStyle="xs" color="fg.muted" pl="3">
                         {item.outputCount > 1 ? (
-                          <><span className="text-foreground/70">"{item.outputName}"</span> {adjustText}</>
+                          <><Text as="span" color="fg" opacity={0.7}>"{item.outputName}"</Text> {adjustText}</>
                         ) : (
                           adjustText
                         )}
-                      </p>
+                      </Text>
                     )
                   })}
-                </div>
-              </div>
+                </VStack>
+              </Box>
             ))}
-          </div>
+          </VStack>
 
-          {/* Steps guide */}
-          <div className="space-y-2 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground/80">{t('studioImport.ledMismatch.stepsTitle')}</p>
-            <ol className="list-decimal pl-4 space-y-1">
-              <li>{t('studioImport.ledMismatch.step1')}</li>
-              <li>{t('studioImport.ledMismatch.step2')}</li>
-              <li>{t('studioImport.ledMismatch.step3')}</li>
-            </ol>
-          </div>
+          <VStack align="stretch" gap="2" textStyle="xs" color="fg.muted">
+            <Text fontWeight="medium" color="fg" opacity={0.8}>{t('studioImport.ledMismatch.stepsTitle')}</Text>
+            <Box as="ol" listStyleType="decimal" pl="4">
+              <Box as="li">{t('studioImport.ledMismatch.step1')}</Box>
+              <Box as="li">{t('studioImport.ledMismatch.step2')}</Box>
+              <Box as="li">{t('studioImport.ledMismatch.step3')}</Box>
+            </Box>
+          </VStack>
         </>
       )}
 
-      <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} className="self-start">
-        <RefreshCw className={cn('size-3.5 mr-1.5', refreshing && 'animate-spin')} />
+      <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} alignSelf="flex-start">
+        <Box as={RefreshCw} boxSize="3.5" mr="1.5" animation={refreshing ? 'spin 1s linear infinite' : undefined} />
         {t('studioImport.ledMismatch.refresh')}
       </Button>
-    </div>
+    </VStack>
   )
 }
 
@@ -646,20 +664,25 @@ export function StudioImportDialog({
   const isLoading = !scanResult
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>{t('studioImport.title')}</DialogTitle>
-        </DialogHeader>
+    <Dialog.Root open={open} onOpenChange={e => onOpenChange(e.open)} placement="center" scrollBehavior="inside">
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxW="2xl" maxH="85vh" bg="bg.panel" borderColor="border" boxShadow="var(--shadow-dialog)">
+            <Dialog.Header>
+              <Dialog.Title>{t('studioImport.title')}</Dialog.Title>
+            </Dialog.Header>
 
-        <ScrollArea.Root className="flex-1 min-h-0 overflow-hidden">
-          <ScrollArea.Viewport className="h-full max-h-[50vh] overflow-y-auto pr-2">
-            {isLoading && (
-              <div className="flex items-center justify-center gap-2 py-12">
-                <Loader2 className="size-5 animate-spin text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">{t('studioImport.scanning')}</span>
-              </div>
-            )}
+            <Dialog.Body>
+              <ScrollArea.Root maxH="50vh" overflow="hidden" size="xs">
+                <ScrollArea.Viewport h="full">
+                  <ScrollArea.Content pe="2">
+                    {isLoading && (
+                      <HStack justify="center" gap="2" py="12">
+                        <Box as={Loader2} boxSize="5" color="fg.muted" animation="spin 1s linear infinite" />
+                        <Text textStyle="sm" color="fg.muted">{t('studioImport.scanning')}</Text>
+                      </HStack>
+                    )}
 
             {!isLoading && step === 'select' && (
               <TabSelectStep
@@ -688,41 +711,43 @@ export function StudioImportDialog({
               />
             )}
 
-            {!isLoading && step === 'confirm' && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">{t('studioImport.layoutName')}</label>
-                  <input
+                    {!isLoading && step === 'confirm' && (
+              <VStack align="stretch" gap="4">
+                <VStack align="stretch" gap="2">
+                  <Text as="label" textStyle="xs" color="fg.muted">{t('studioImport.layoutName')}</Text>
+                  <Input
                     type="text"
-                    className="w-full h-8 rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+                    size="sm"
                     value={layoutName}
                     onChange={e => setLayoutName(e.target.value)}
                     maxLength={64}
                   />
-                </div>
-                <div className="flex gap-4 text-xs text-muted-foreground">
-                  <span>{t('studioImport.placements').replace('{n}', String(resolvedCount))}</span>
+                </VStack>
+                <HStack gap="4" textStyle="xs" color="fg.muted">
+                  <Text>{t('studioImport.placements').replace('{n}', String(resolvedCount))}</Text>
                   {skippedCount > 0 && (
-                    <span className="text-orange-500">
+                    <Text color="orange.500">
                       {t('studioImport.skipUnmatched')} ({skippedCount})
-                    </span>
+                    </Text>
                   )}
-                </div>
+                </HStack>
 
                 {importResult && !importResult.success && (
-                  <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600">
+                  <Box rounded="var(--radius-m)" borderWidth="1px" borderColor="red.500/30" bg="red.500/5" p="3" textStyle="xs" color="red.600">
                     {t('studioImport.error')}: {importResult.error ?? importResult.detail ?? 'unknown'}
-                  </div>
+                  </Box>
                 )}
-              </div>
+              </VStack>
             )}
-          </ScrollArea.Viewport>
-          <ScrollArea.Scrollbar orientation="vertical" className="flex w-2 touch-none p-px select-none">
-            <ScrollArea.Thumb className="relative flex-1 rounded-full bg-foreground/10" />
-          </ScrollArea.Scrollbar>
-        </ScrollArea.Root>
+                  </ScrollArea.Content>
+                </ScrollArea.Viewport>
+                <ScrollArea.Scrollbar orientation="vertical">
+                  <ScrollArea.Thumb />
+                </ScrollArea.Scrollbar>
+              </ScrollArea.Root>
+            </Dialog.Body>
 
-        <DialogFooter>
+        <Dialog.Footer>
           {step !== 'select' && (
             <Button
               variant="outline"
@@ -733,22 +758,22 @@ export function StudioImportDialog({
                 else if (step === 'confirm') setStep(ledMismatches.length > 0 ? 'leds' : 'match')
               }}
             >
-              <ArrowLeft className="size-3.5 mr-1" />
+              <Box as={ArrowLeft} boxSize="3.5" mr="1" />
               {t('studioImport.back')}
             </Button>
           )}
-          <div className="flex-1" />
+          <Box flex="1" />
           {step === 'match' && (
             <Button size="sm" onClick={handleNextFromMatch} disabled={resolvedCount === 0}>
               {t('studioImport.next')}
-              <ArrowRight className="size-3.5 ml-1" />
+              <Box as={ArrowRight} boxSize="3.5" ml="1" />
             </Button>
           )}
           {step === 'leds' && (
             ledMismatches.length === 0 ? (
               <Button size="sm" onClick={() => setStep('confirm')}>
                 {t('studioImport.next')}
-                <ArrowRight className="size-3.5 ml-1" />
+                <Box as={ArrowRight} boxSize="3.5" ml="1" />
               </Button>
             ) : (
               <Button
@@ -763,15 +788,17 @@ export function StudioImportDialog({
           {step === 'confirm' && (
             <Button size="sm" onClick={handleImport} disabled={importing || resolvedCount === 0}>
               {importing ? (
-                <Loader2 className="size-3.5 mr-1 animate-spin" />
+                <Box as={Loader2} boxSize="3.5" mr="1" animation="spin 1s linear infinite" />
               ) : (
-                <Download className="size-3.5 mr-1" />
+                <Box as={Download} boxSize="3.5" mr="1" />
               )}
               {t('studioImport.import')}
             </Button>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
   )
 }
