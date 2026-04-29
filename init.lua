@@ -1683,6 +1683,15 @@ emit_layout_status = function(layout, device_lookup)
     })
 end
 
+local function emit_effect_params_sync_ack(layout_id, sync_seq)
+    if sync_seq == nil then return end
+    ext.page_emit({
+        type = "effect_params_sync_ack",
+        layout_id = layout_id,
+        sync_seq = sync_seq,
+    })
+end
+
 local function clamp_preview_channel(value)
     local n = tonumber(value)
     if not n or n ~= n then
@@ -1968,9 +1977,13 @@ function P.on_page_message(msg)
 
     -- ── Virtual-device effect params ──
     elseif msg.type == "update_layout_virtual_effect_params" then
-        local layout = find_layout(msg.layout_id or config.active_layout_id)
+        local requested_layout_id = msg.layout_id or config.active_layout_id
+        local layout = find_layout(requested_layout_id)
         if layout then
             with_virtual_device_rollback(layout, function() return update_layout_virtual_effect_params(layout, msg.params) end)
+            emit_effect_params_sync_ack(layout.id, msg.sync_seq)
+        else
+            emit_effect_params_sync_ack(requested_layout_id, msg.sync_seq)
         end
 
     -- ── Reset virtual-device effect params ──

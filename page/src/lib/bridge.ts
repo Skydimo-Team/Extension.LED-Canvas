@@ -144,14 +144,124 @@ let ws: WebSocket | null = null
 let rpcId = 1
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let lastDeviceHash = ''
+let effectParamSyncSeq = 1
+
+const EFFECT_PARAM_SYNC_ACK_TIMEOUT_MS = 1000
+
+type EffectParamSyncPayload = {
+  layoutId: string
+  params: Record<string, unknown>
+  seq: number
+  signature: string
+}
+
+type EffectParamSyncState = {
+  inFlightSeq: number | null
+  inFlightSignature: string | null
+  pending: EffectParamSyncPayload | null
+  timeout: ReturnType<typeof setTimeout> | null
+}
+
+const effectParamSyncByLayoutId = new Map<string, EffectParamSyncState>()
 
 function send(method: string, params: Record<string, unknown>) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false
   ws.send(JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }))
+  return true
 }
 
 function sendToExt(data: Record<string, unknown>) {
-  send('ext_page_send', { extId: PAGE.extId, data })
+  return send('ext_page_send', { extId: PAGE.extId, data })
+}
+
+function getEffectParamSyncState(layoutId: string) {
+  let state = effectParamSyncByLayoutId.get(layoutId)
+  if (!state) {
+    state = {
+      inFlightSeq: null,
+      inFlightSignature: null,
+      pending: null,
+      timeout: null,
+    }
+    effectParamSyncByLayoutId.set(layoutId, state)
+  }
+  return state
+}
+
+function clearEffectParamSyncTimeout(state: EffectParamSyncState) {
+  if (!state.timeout) return
+  clearTimeout(state.timeout)
+  state.timeout = null
+}
+
+function dispatchEffectParamSync(payload: EffectParamSyncPayload) {
+  const state = getEffectParamSyncState(payload.layoutId)
+  state.pending = null
+  state.inFlightSeq = payload.seq
+  state.inFlightSignature = payload.signature
+  clearEffectParamSyncTimeout(state)
+
+  const sent = sendToExt({
+    type: 'update_layout_virtual_effect_params',
+    layout_id: payload.layoutId,
+    params: payload.params,
+    sync_seq: payload.seq,
+  })
+
+  if (!sent) {
+    state.inFlightSeq = null
+    state.inFlightSignature = null
+    state.pending = payload
+    return
+  }
+
+  state.timeout = setTimeout(() => {
+    acknowledgeEffectParamSync(payload.layoutId, payload.seq)
+  }, EFFECT_PARAM_SYNC_ACK_TIMEOUT_MS)
+}
+
+function queueEffectParamSync(layoutId: string, params: Record<string, unknown>) {
+  const state = getEffectParamSyncState(layoutId)
+  const payload = {
+    layoutId,
+    params,
+    seq: effectParamSyncSeq++,
+    signature: JSON.stringify(params),
+  }
+
+  if (state.inFlightSeq != null) {
+    state.pending = payload.signature === state.inFlightSignature ? null : payload
+    return
+  }
+
+  if (state.pending?.signature === payload.signature) return
+  dispatchEffectParamSync(payload)
+}
+
+function acknowledgeEffectParamSync(layoutId: string, seq: number | null) {
+  const state = effectParamSyncByLayoutId.get(layoutId)
+  if (!state) return
+  if (seq != null && state.inFlightSeq != null && seq !== state.inFlightSeq) return
+
+  const completedSignature = state.inFlightSignature
+  clearEffectParamSyncTimeout(state)
+  state.inFlightSeq = null
+  state.inFlightSignature = null
+
+  const pending = state.pending
+  if (!pending || pending.signature === completedSignature) {
+    state.pending = null
+    return
+  }
+
+  dispatchEffectParamSync(pending)
+}
+
+function resetEffectParamSyncs() {
+  for (const state of effectParamSyncByLayoutId.values()) {
+    clearEffectParamSyncTimeout(state)
+  }
+  effectParamSyncByLayoutId.clear()
 }
 
 function normalizeOutputs(outputs: unknown): TreeDevice['outputs'] {
@@ -365,6 +475,11 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
           if (data?.type === 'layout_status') {
             applyLayoutStatus(data as Record<string, unknown>)
           }
+          if (data?.type === 'effect_params_sync_ack') {
+            const layoutId = typeof data.layout_id === 'string' ? data.layout_id : null
+            const syncSeq = typeof data.sync_seq === 'number' ? data.sync_seq : null
+            if (layoutId) acknowledgeEffectParamSync(layoutId, syncSeq)
+          }
           if (data?.type === 'preview_frame') {
             applyPreviewFrame(data as Record<string, unknown>)
           }
@@ -382,6 +497,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     }
 
     ws.onclose = () => {
+      resetEffectParamSyncs()
       set({
         status: 'disconnected',
         previewByLayoutId: {},
@@ -491,7 +607,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     },
 
     updateVirtualDeviceEffectParams(layoutId, params) {
-      sendToExt({ type: 'update_layout_virtual_effect_params', layout_id: layoutId, params })
+      queueEffectParamSync(layoutId, params)
     },
 
     resetVirtualDeviceEffectParams(layoutId) {
@@ -519,6 +635,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
     disconnect() {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      resetEffectParamSyncs()
       if (ws) { ws.close(); ws = null }
       lastDeviceHash = ''
       set({
