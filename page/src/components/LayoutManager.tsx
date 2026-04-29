@@ -1,35 +1,34 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Plus, RotateCcw, X } from 'lucide-react'
+import { Fragment, useMemo, type ReactNode } from 'react'
+import { RotateCcw } from 'lucide-react'
 import {
   Box,
-  Button,
   HStack,
   IconButton,
-  Input,
-  NativeSelect,
   ScrollArea,
-  Slider,
-  Switch,
   Text,
   VStack,
 } from '@chakra-ui/react'
+import { Select } from '@/components/ui/Select'
+import { Switch } from '@/components/ui/Switch'
+import { ParamRenderer } from '@/features/devices/components/params/ParamRenderer'
 import {
   useBridgeStore,
-  type EffectInfo,
   type EffectParamDependency,
   type EffectParamInfo,
-  type LocalizedText,
+  type LocalizedText as BridgeLocalizedText,
 } from '@/lib/bridge'
 import { t, useLocale } from '@/lib/i18n'
+import type { EffectParam, EffectParamValue, LocalizedText as UiLocalizedText, RangeSliderValue } from '@/types'
 
 type VisibleParamEntry = {
-  param: EffectParamInfo
+  param: EffectParam
+  value: EffectParamValue
   disabled: boolean
   groupLabel: string | null
   showGroup: boolean
 }
 
-function resolveLocalizedText(value: LocalizedText | undefined, locale: string): string {
+function resolveLocalizedText(value: BridgeLocalizedText | undefined, locale: string): string {
   if (!value) return ''
   if (value.byLocale?.[locale]) return value.byLocale[locale]
 
@@ -86,18 +85,11 @@ function normalizeNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function formatNumber(value: number, step?: number) {
-  const precision = step && step < 1
-    ? Math.min(3, Math.max(0, `${step}`.split('.')[1]?.length ?? 0))
-    : 0
-  return value.toFixed(precision)
-}
-
 function normalizeColor(value: unknown, fallback = '#ffffff') {
   return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 }
 
-function normalizeRangeValue(param: EffectParamInfo, value: unknown): [number, number] {
+function normalizeRangeValue(param: { min?: number; max?: number; default?: unknown }, value: unknown): RangeSliderValue {
   const min = normalizeNumber(param.min, 0)
   const max = normalizeNumber(param.max, 100)
   const fallback = Array.isArray(param.default) ? param.default : [min, max]
@@ -107,48 +99,132 @@ function normalizeRangeValue(param: EffectParamInfo, value: unknown): [number, n
   return [start, end]
 }
 
-function normalizeMultiColorValue(param: EffectParamInfo, value: unknown): string[] {
+function normalizeMultiColorValue(param: { default?: unknown }, value: unknown): string[] {
   const fallback = Array.isArray(param.default) ? param.default : ['#ffffff']
   const raw = Array.isArray(value) ? value : fallback
   const normalized = raw.map(color => normalizeColor(color)).filter(Boolean)
   return normalized.length > 0 ? normalized : ['#ffffff']
 }
 
-function serializeOptionValue(value: unknown) {
-  return JSON.stringify(value) ?? String(value)
-}
-
-function parseOptionValue(value: string): unknown {
-  try {
-    return JSON.parse(value)
-  } catch {
-    return value
+function normalizeLocalizedText(value: BridgeLocalizedText | undefined, fallback: string): UiLocalizedText {
+  return {
+    raw: value?.raw ?? fallback,
+    byLocale: value?.byLocale,
   }
 }
 
-function SettingSwitch({
-  checked,
-  disabled = false,
-  onToggle,
-}: {
-  checked: boolean
-  disabled?: boolean
-  onToggle: () => void
-}) {
-  return (
-    <Switch.Root
-      disabled={disabled}
-      checked={checked}
-      size="sm"
-      onCheckedChange={onToggle}
-    >
-      <Switch.HiddenInput />
-      <Switch.Control>
-        <Switch.Thumb />
-      </Switch.Control>
-      <Switch.Label />
-    </Switch.Root>
-  )
+function normalizeDependency(dependency: EffectParamDependency | null | undefined): EffectParam['dependency'] {
+  if (!dependency?.key) return undefined
+
+  return {
+    key: dependency.key,
+    equals: typeof dependency.equals === 'number' ? dependency.equals : undefined,
+    notEquals: typeof dependency.not_equals === 'number' ? dependency.not_equals : undefined,
+    behavior: dependency.behavior,
+  }
+}
+
+function normalizeEffectParamType(type: string) {
+  if (type === 'range_slider') return 'range-slider'
+  if (type === 'multi_color') return 'multi-color'
+  return type
+}
+
+function normalizeEffectParam(param: EffectParamInfo): EffectParam | null {
+  const type = normalizeEffectParamType(param.type)
+  const label = normalizeLocalizedText(param.label, param.key)
+  const group = param.group ? normalizeLocalizedText(param.group, '') : undefined
+  const dependency = normalizeDependency(param.dependency)
+  const base = { key: param.key, label, group, dependency }
+
+  switch (type) {
+    case 'slider': {
+      const min = normalizeNumber(param.min, 0)
+      const max = normalizeNumber(param.max, 100)
+      return {
+        ...base,
+        type,
+        min,
+        max,
+        step: normalizeNumber(param.step, 1),
+        default: normalizeNumber(param.default, min),
+      }
+    }
+
+    case 'range-slider': {
+      const min = normalizeNumber(param.min, 0)
+      const max = normalizeNumber(param.max, 100)
+      return {
+        ...base,
+        type,
+        min,
+        max,
+        step: normalizeNumber(param.step, 1),
+        default: normalizeRangeValue({ min, max, default: param.default }, param.default),
+      }
+    }
+
+    case 'select': {
+      const options = (param.options ?? []).map((option, index) => {
+        const value = normalizeNumber(option.value, index)
+        return {
+          value,
+          label: normalizeLocalizedText(option.label, String(value)),
+        }
+      })
+
+      return {
+        ...base,
+        type,
+        default: normalizeNumber(param.default, options[0]?.value ?? 0),
+        options,
+      }
+    }
+
+    case 'toggle':
+      return {
+        ...base,
+        type,
+        default: param.default === true,
+      }
+
+    case 'color':
+      return {
+        ...base,
+        type,
+        default: normalizeColor(param.default),
+      }
+
+    case 'multi-color':
+      return {
+        ...base,
+        type,
+        default: normalizeMultiColorValue(param, param.default),
+        fixedCount: typeof param.fixedCount === 'number' ? param.fixedCount : undefined,
+        minCount: typeof param.minCount === 'number' ? param.minCount : undefined,
+        maxCount: typeof param.maxCount === 'number' ? param.maxCount : undefined,
+      }
+
+    default:
+      return null
+  }
+}
+
+function normalizeEffectParamValue(param: EffectParam, value: unknown): EffectParamValue {
+  switch (param.type) {
+    case 'slider':
+      return Math.min(param.max, Math.max(param.min, normalizeNumber(value, param.default)))
+    case 'range-slider':
+      return normalizeRangeValue(param, value)
+    case 'select':
+      return normalizeNumber(value, param.default)
+    case 'toggle':
+      return value === true
+    case 'color':
+      return normalizeColor(value, param.default)
+    case 'multi-color':
+      return normalizeMultiColorValue(param, value)
+  }
 }
 
 function BasicSettingRow({
@@ -180,281 +256,10 @@ function BasicSettingRow({
           </Text>
         ) : null}
       </Box>
-      <Box flexShrink={0} w="152px" maxW="56%">
+      <Box flexShrink={0} w="152px" maxW="56%" display="flex" justifyContent="flex-end" alignItems="center">
         {control}
       </Box>
     </HStack>
-  )
-}
-
-function EffectParamField({
-  param,
-  value,
-  disabled,
-  locale,
-  onChange,
-}: {
-  param: EffectParamInfo
-  value: unknown
-  disabled: boolean
-  locale: string
-  onChange: (nextValue: unknown) => void
-}) {
-  const label = resolveLocalizedText(param.label, locale) || param.key
-  const syncedValue = useMemo(() => cloneValue(value), [value])
-  const [draftValue, setDraftValue] = useState<unknown>(() => syncedValue)
-  const [isInteracting, setIsInteracting] = useState(false)
-  const resolvedValue = isInteracting ? draftValue : syncedValue
-  const draftValueRef = useRef(resolvedValue)
-  const lastCommittedValueRef = useRef<unknown>(syncedValue)
-
-  useEffect(() => {
-    draftValueRef.current = resolvedValue
-  }, [resolvedValue])
-
-  useEffect(() => {
-    lastCommittedValueRef.current = syncedValue
-  }, [syncedValue])
-
-  const startInteraction = useCallback(() => {
-    setDraftValue(cloneValue(syncedValue))
-    setIsInteracting(true)
-  }, [syncedValue])
-
-  const commitDeferredValue = useCallback((nextValue?: unknown) => {
-    const resolvedValue = cloneValue(nextValue ?? draftValueRef.current)
-    setIsInteracting(false)
-    setDraftValue(resolvedValue)
-
-    if (JSON.stringify(resolvedValue) === JSON.stringify(lastCommittedValueRef.current)) {
-      return
-    }
-
-    lastCommittedValueRef.current = cloneValue(resolvedValue)
-    onChange(resolvedValue)
-  }, [onChange])
-
-  // Toggle type uses horizontal BasicSettingRow layout
-  if (param.type === 'toggle') {
-    return (
-      <BasicSettingRow
-        label={label}
-        disabled={disabled}
-        control={(
-          <HStack justify="flex-end">
-            <SettingSwitch
-              checked={value === true}
-              disabled={disabled}
-              onToggle={() => onChange(value !== true)}
-            />
-          </HStack>
-        )}
-      />
-    )
-  }
-
-  let control: React.ReactNode = null
-
-  switch (param.type) {
-    case 'slider': {
-      const min = normalizeNumber(param.min, 0)
-      const max = normalizeNumber(param.max, 100)
-      const step = normalizeNumber(param.step, 1)
-      const numericValue = Math.min(max, Math.max(min, normalizeNumber(resolvedValue, min)))
-      control = (
-        <HStack gap="2">
-          <Slider.Root
-            flex="1"
-            min={min}
-            max={max}
-            step={step}
-            value={[numericValue]}
-            disabled={disabled}
-            aria-label={[label]}
-            onPointerDown={startInteraction}
-            onValueChange={e => {
-              setIsInteracting(true)
-              setDraftValue(e.value[0])
-            }}
-            onValueChangeEnd={e => {
-              commitDeferredValue(e.value[0])
-            }}
-          >
-            <Slider.Control>
-              <Slider.Track>
-                <Slider.Range />
-              </Slider.Track>
-              <Slider.Thumbs />
-            </Slider.Control>
-          </Slider.Root>
-          <Text w="52px" flexShrink={0} textAlign="right" textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
-            {formatNumber(numericValue, step)}
-          </Text>
-        </HStack>
-      )
-      break
-    }
-
-    case 'range_slider': {
-      const min = normalizeNumber(param.min, 0)
-      const max = normalizeNumber(param.max, 100)
-      const step = normalizeNumber(param.step, 1)
-      const [start, end] = normalizeRangeValue(param, resolvedValue)
-
-      control = (
-        <VStack align="stretch" gap="2">
-          <Slider.Root
-            min={min}
-            max={max}
-            step={step}
-            value={[start, end]}
-            disabled={disabled}
-            aria-label={[t('layoutManager.rangeMin'), t('layoutManager.rangeMax')]}
-            onPointerDown={startInteraction}
-            onValueChange={e => {
-              setIsInteracting(true)
-              setDraftValue(e.value)
-            }}
-            onValueChangeEnd={e => {
-              commitDeferredValue(e.value)
-            }}
-          >
-            <Slider.Control>
-              <Slider.Track>
-                <Slider.Range />
-              </Slider.Track>
-              <Slider.Thumbs />
-            </Slider.Control>
-          </Slider.Root>
-          <HStack justify="space-between" textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
-            <Text>{t('layoutManager.rangeMin')}: {formatNumber(start, step)}</Text>
-            <Text>{t('layoutManager.rangeMax')}: {formatNumber(end, step)}</Text>
-          </HStack>
-        </VStack>
-      )
-      break
-    }
-
-    case 'select': {
-      const options = Array.isArray(param.options) ? param.options : []
-      const currentValue = serializeOptionValue(value)
-      control = (
-        <NativeSelect.Root size="sm" disabled={disabled}>
-          <NativeSelect.Field
-            value={currentValue}
-            onChange={e => onChange(parseOptionValue(e.currentTarget.value))}
-          >
-            {options.map((option, index) => (
-              <option key={`${param.key}-${index}`} value={serializeOptionValue(option.value)}>
-                {resolveLocalizedText(option.label, locale) || String(option.value)}
-              </option>
-            ))}
-          </NativeSelect.Field>
-          <NativeSelect.Indicator />
-        </NativeSelect.Root>
-      )
-      break
-    }
-
-    case 'color': {
-      const color = normalizeColor(value)
-      control = (
-        <HStack gap="2">
-          <Input
-            type="color"
-            h="32px"
-            w="44px"
-            p="1"
-            value={color}
-            disabled={disabled}
-            onChange={e => onChange(e.target.value)}
-          />
-          <Box flex="1" rounded="var(--radius-m)" borderWidth="1px" borderColor="border" bg="bg.muted" px="2" py="1.5">
-            <Text textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
-            {color.toUpperCase()}
-            </Text>
-          </Box>
-        </HStack>
-      )
-      break
-    }
-
-    case 'multi_color': {
-      const colors = normalizeMultiColorValue(param, value)
-      const fixedCount = typeof param.fixedCount === 'number' ? param.fixedCount : null
-      const minCount = fixedCount ?? (typeof param.minCount === 'number' ? param.minCount : 1)
-      const maxCount = fixedCount ?? (typeof param.maxCount === 'number' ? param.maxCount : 16)
-      const canAdd = !disabled && fixedCount == null && colors.length < maxCount
-      const canRemove = (count: number) => !disabled && fixedCount == null && count > minCount
-
-      control = (
-        <VStack align="stretch" gap="2">
-          {colors.map((color, index) => (
-            <HStack key={`${param.key}-${index}`} gap="2">
-              <Input
-                type="color"
-                h="32px"
-                w="44px"
-                p="1"
-                value={color}
-                disabled={disabled}
-                onChange={e => {
-                  const next = [...colors]
-                  next[index] = e.target.value
-                  onChange(next)
-                }}
-              />
-              <Box flex="1" rounded="var(--radius-m)" borderWidth="1px" borderColor="border" bg="bg.muted" px="2" py="1.5">
-                <Text textStyle="2xs" color="fg.muted" fontVariantNumeric="tabular-nums">
-                  {color.toUpperCase()}
-                </Text>
-              </Box>
-              <IconButton
-                aria-label={t('layoutManager.removeColor')}
-                size="xs"
-                variant="surface"
-                disabled={!canRemove(colors.length)}
-                onClick={() => {
-                  const next = colors.filter((_, colorIndex) => colorIndex !== index)
-                  onChange(next)
-                }}
-                title={t('layoutManager.removeColor')}
-              >
-                <X size={14} />
-              </IconButton>
-            </HStack>
-          ))}
-          {canAdd ? (
-            <Button
-              h="30px"
-              size="xs"
-              variant="outline"
-              borderStyle="dashed"
-              onClick={() => onChange([...colors, '#ffffff'])}
-            >
-              <Plus size={12} />
-              {t('layoutManager.addColor')}
-            </Button>
-          ) : null}
-        </VStack>
-      )
-      break
-    }
-
-    default: {
-      control = (
-        <Box rounded="var(--radius-m)" borderWidth="1px" borderStyle="dashed" borderColor="border" bg="bg.muted" px="2" py="1.5">
-          <Text textStyle="2xs" color="fg.muted">{t('layoutManager.unsupported')}</Text>
-        </Box>
-      )
-    }
-  }
-
-  return (
-    <Box px="3" py="2.5" opacity={disabled ? 0.65 : 1}>
-      <Text mb="2" textStyle="xs" color="fg">{label}</Text>
-      {control}
-    </Box>
   )
 }
 
@@ -503,12 +308,16 @@ export function LayoutManager() {
       const dependencyState = evaluateDependency(param.dependency, effectiveParams)
       if (dependencyState.hidden) return []
 
+      const normalizedParam = normalizeEffectParam(param)
+      if (!normalizedParam) return []
+
       const groupLabel = resolveLocalizedText(param.group, locale) || null
       const showGroup = groupLabel != null && groupLabel !== lastGroupLabel
       lastGroupLabel = groupLabel ?? lastGroupLabel
 
       return [{
-        param,
+        param: normalizedParam,
+        value: normalizeEffectParamValue(normalizedParam, effectiveParams[param.key]),
         disabled: dependencyState.disabled,
         groupLabel,
         showGroup,
@@ -547,10 +356,10 @@ export function LayoutManager() {
                   disabled={!isRegistered}
                   control={(
                     <HStack justify="flex-end">
-                      <SettingSwitch
+                      <Switch
                         checked={activeLayout.virtual_device.power_on}
                         disabled={!isRegistered}
-                        onToggle={() => setVirtualDevicePower(
+                        onChange={() => setVirtualDevicePower(
                           activeLayout.id,
                           !activeLayout.virtual_device.power_on,
                         )}
@@ -563,10 +372,10 @@ export function LayoutManager() {
                   disabled={!isRegistered}
                   control={(
                     <HStack justify="flex-end">
-                      <SettingSwitch
+                      <Switch
                         checked={activeLayout.virtual_device.paused}
                         disabled={!isRegistered}
-                        onToggle={() => setVirtualDevicePaused(
+                        onChange={() => setVirtualDevicePaused(
                           activeLayout.id,
                           !activeLayout.virtual_device.paused,
                         )}
@@ -578,20 +387,18 @@ export function LayoutManager() {
                   label={t('layoutManager.effect')}
                   disabled={!isRegistered}
                   control={(
-                    <NativeSelect.Root size="sm" disabled={!isRegistered}>
-                      <NativeSelect.Field
-                        value={activeLayout.virtual_device.effect_id ?? ''}
-                        onChange={e => setVirtualDeviceEffect(activeLayout.id, e.currentTarget.value || null)}
-                      >
-                        <option value="">{t('layoutManager.effect.none')}</option>
-                        {sortedEffects.map((effect: EffectInfo) => (
-                          <option key={effect.id} value={effect.id}>
-                            {resolveLocalizedText(effect.name, locale) || effect.id}
-                          </option>
-                        ))}
-                      </NativeSelect.Field>
-                      <NativeSelect.Indicator />
-                    </NativeSelect.Root>
+                    <Select
+                      value={activeLayout.virtual_device.effect_id ?? ''}
+                      options={[
+                        { value: '', label: t('layoutManager.effect.none') },
+                        ...sortedEffects.map(effect => ({
+                          value: effect.id,
+                          label: resolveLocalizedText(effect.name, locale) || effect.id,
+                        })),
+                      ]}
+                      onChange={effectId => setVirtualDeviceEffect(activeLayout.id, effectId || null)}
+                      disabled={!isRegistered}
+                    />
                   )}
                 />
               </Box>
@@ -635,27 +442,34 @@ export function LayoutManager() {
                     {t('layoutManager.noSettings')}
                   </Text>
                 ) : (
-                  visibleParams.map(({ param, disabled, groupLabel, showGroup }) => (
-                    <Fragment key={param.key}>
-                      {showGroup && groupLabel ? (
-                        <Text px="3" pt="3" pb="1" fontSize="10px" fontWeight="semibold" textTransform="uppercase" color="fg.muted" opacity={0.55}>
-                          {groupLabel}
-                        </Text>
-                      ) : null}
-                      <EffectParamField
-                        param={param}
-                        value={effectiveParams[param.key]}
-                        disabled={!isRegistered || disabled}
-                        locale={locale}
-                        onChange={(nextValue) => {
-                          updateVirtualDeviceEffectParams(activeLayout.id, {
-                            ...effectiveParams,
-                            [param.key]: nextValue,
-                          })
-                        }}
-                      />
-                    </Fragment>
-                  ))
+                  <Box display="flex" flexDirection="column" gap="4" px="3" pb="3">
+                    {visibleParams.map(({ param, value, disabled, groupLabel, showGroup }) => (
+                      <Fragment key={param.key}>
+                        {showGroup && groupLabel ? (
+                          <Text fontSize="10px" fontWeight="semibold" textTransform="uppercase" color="fg.muted" opacity={0.55}>
+                            {groupLabel}
+                          </Text>
+                        ) : null}
+                        <ParamRenderer
+                          param={param}
+                          value={value}
+                          disabled={!isRegistered || disabled}
+                          onChange={(nextValue) => {
+                            updateVirtualDeviceEffectParams(activeLayout.id, {
+                              ...effectiveParams,
+                              [param.key]: nextValue,
+                            })
+                          }}
+                          onCommit={(nextValue) => {
+                            updateVirtualDeviceEffectParams(activeLayout.id, {
+                              ...effectiveParams,
+                              [param.key]: nextValue,
+                            })
+                          }}
+                        />
+                      </Fragment>
+                    ))}
+                  </Box>
                 )}
               </Box>
             </Box>
