@@ -1,6 +1,6 @@
 import './App.css'
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp, ScanSearch, FolderInput } from 'lucide-react'
+import { type ReactNode, useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect } from 'react'
+import { ArrowLeftRight, ArrowUpDown, Magnet, FilePlus2, Plus, X, Pencil, Check, ChevronDown, Search, CircleHelp, ScanSearch, FolderInput } from 'lucide-react'
 import {
   Box,
   Button,
@@ -88,10 +88,12 @@ function serializePlacementSyncState(placed: PlacedDevice[], canvasBounds: Canva
   })
 }
 
-function GridSizeInput({ label, ariaLabel, value, onCommit, onEditStart, onEditEnd }: {
+function GridSizeInput({ label, ariaLabel, value, compact, icon, onCommit, onEditStart, onEditEnd }: {
   label: string
   ariaLabel: string
   value: number
+  compact: boolean
+  icon: ReactNode
   onCommit: (v: number) => void
   onEditStart: () => void
   onEditEnd: () => void
@@ -99,19 +101,26 @@ function GridSizeInput({ label, ariaLabel, value, onCommit, onEditStart, onEditE
   const [draft, setDraft] = useState<string | null>(null)
   const text = draft ?? String(value)
 
-  return (
+  const control = (
     <HStack
       as="label"
       h="40px"
       flexShrink={0}
-      gap="2"
-      px="2.5"
+      gap={compact ? '1.5' : '2'}
+      px={compact ? '2' : '2.5'}
       rounded="var(--radius-l)"
       borderWidth="1px"
       borderColor="border"
       bg="bg.muted"
+      title={compact ? label : undefined}
     >
-      <Text as="span" textStyle="sm" color="fg.muted">{label}:</Text>
+      {compact ? (
+        <Box as="span" display="inline-flex" alignItems="center" justifyContent="center" color="fg.muted" lineHeight="0" aria-hidden="true">
+          {icon}
+        </Box>
+      ) : (
+        <Text as="span" textStyle="sm" color="fg.muted">{label}:</Text>
+      )}
       <Input
         variant="flushed"
         size="sm"
@@ -148,6 +157,74 @@ function GridSizeInput({ label, ariaLabel, value, onCommit, onEditStart, onEditE
         style={{ width: contentWidth(text, t('gridSize.placeholder')) }}
       />
     </HStack>
+  )
+
+  if (!compact) return control
+
+  return (
+    <Tooltip.Root openDelay={120} closeDelay={80} positioning={{ placement: 'bottom' }}>
+      <Tooltip.Trigger asChild>{control}</Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content textStyle="xs">{label}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip.Root>
+  )
+}
+
+function ToolbarActionButton({ compact, label, tooltip, icon, variant = 'surface', disabled, onClick }: {
+  compact: boolean
+  label: string
+  tooltip?: string
+  icon: ReactNode
+  variant?: 'surface' | 'solid'
+  disabled?: boolean
+  onClick: () => void
+}) {
+  const accessibleLabel = tooltip ?? label
+
+  if (!compact) {
+    return (
+      <Button
+        h="40px"
+        px="3.5"
+        rounded="var(--radius-l)"
+        variant={variant}
+        borderWidth="1px"
+        onClick={onClick}
+        disabled={disabled}
+        title={accessibleLabel}
+      >
+        {icon}
+        {label}
+      </Button>
+    )
+  }
+
+  return (
+    <Tooltip.Root openDelay={120} closeDelay={80} positioning={{ placement: 'bottom' }}>
+      <Tooltip.Trigger asChild>
+        <IconButton
+          aria-label={accessibleLabel}
+          w="40px"
+          h="40px"
+          rounded="var(--radius-l)"
+          variant={variant}
+          borderWidth="1px"
+          onClick={onClick}
+          disabled={disabled}
+          title={accessibleLabel}
+        >
+          {icon}
+        </IconButton>
+      </Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content textStyle="xs">{accessibleLabel}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip.Root>
   )
 }
 
@@ -359,7 +436,7 @@ function LayoutSelector({ layouts, activeLayout, onSwitch, onCreate, onDelete }:
 }
 
 function App() {
-  useLocale() // subscribe to locale changes for re-render
+  const locale = useLocale() // subscribe to locale changes for re-render
   const canvasBounds = useCanvasStore(s => s.canvasBounds)
   const updateCanvasBounds = useCanvasStore(s => s.updateCanvasBounds)
   const snapToGrid = useCanvasStore(s => s.snapToGrid)
@@ -385,6 +462,9 @@ function App() {
   const clearPlacementPreview = useBridgeStore(s => s.clearPlacementPreview)
   const updateSnap = useBridgeStore(s => s.updateSnap)
   const [studioImportOpen, setStudioImportOpen] = useState(false)
+  const [toolbarCompact, setToolbarCompact] = useState(false)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const toolbarMeasureRef = useRef<HTMLDivElement>(null)
 
   const activeLayout = layouts.find(l => l.id === activeLayoutId) ?? null
   const canvasRegistered = activeLayout?.registered ?? false
@@ -398,6 +478,32 @@ function App() {
   const canAutoFitCanvas = autoFitCanvasBounds != null
     && !sameCanvasBounds(canvasBounds, autoFitCanvasBounds)
     && !editingDeviceId
+
+  const measureToolbarCompact = useCallback(() => {
+    const toolbarEl = toolbarRef.current
+    const measureEl = toolbarMeasureRef.current
+    if (!toolbarEl || !measureEl) return
+
+    const availableWidth = Math.floor(toolbarEl.clientWidth)
+    const requiredWidth = Math.ceil(measureEl.getBoundingClientRect().width)
+    setToolbarCompact(requiredWidth > availableWidth)
+  }, [])
+
+  useLayoutEffect(() => {
+    const toolbarEl = toolbarRef.current
+    const measureEl = toolbarMeasureRef.current
+    if (!toolbarEl || !measureEl) return
+
+    const resizeObserver = new ResizeObserver(() => {
+      measureToolbarCompact()
+    })
+
+    resizeObserver.observe(toolbarEl)
+    resizeObserver.observe(measureEl)
+    measureToolbarCompact()
+
+    return () => resizeObserver.disconnect()
+  }, [measureToolbarCompact, locale, activeLayout?.name, canvasWidth, canvasHeight, canvasRegistered])
 
   const editingPreviewDevices = useMemo(() => {
     if (!editingDeviceId || !editingMatrix) return null
@@ -604,92 +710,102 @@ function App() {
     endCanvasHistoryBatch()
   }, [autoFitCanvasBounds, canvasBounds, editingDeviceId, updateCanvasBounds])
 
+  const renderToolbarContents = (compact: boolean) => (
+    <>
+      <LayoutSelector
+        layouts={layouts}
+        activeLayout={activeLayout}
+        onSwitch={switchLayout}
+        onCreate={createLayout}
+        onDelete={deleteLayout}
+      />
+
+      {activeLayout && (
+        <InlineEdit
+          value={activeLayout.name}
+          onCommit={name => renameLayout(activeLayout.id, name)}
+        />
+      )}
+
+      <ToolbarActionButton
+        compact={compact}
+        label={t('studioImport.button')}
+        tooltip={t('studioImport.title')}
+        icon={<FolderInput size={16} />}
+        onClick={() => setStudioImportOpen(true)}
+      />
+
+      <Box flex="1" />
+
+      <GridSizeInput
+        label={t('gridSize.width')}
+        ariaLabel={t('gridSize.widthLabel')}
+        value={canvasWidth}
+        compact={compact}
+        icon={<ArrowLeftRight size={16} />}
+        onCommit={v => updateCanvasBounds({ width: v })}
+        onEditStart={beginCanvasHistoryBatch}
+        onEditEnd={endCanvasHistoryBatch}
+      />
+      <GridSizeInput
+        label={t('gridSize.height')}
+        ariaLabel={t('gridSize.heightLabel')}
+        value={canvasHeight}
+        compact={compact}
+        icon={<ArrowUpDown size={16} />}
+        onCommit={v => updateCanvasBounds({ height: v })}
+        onEditStart={beginCanvasHistoryBatch}
+        onEditEnd={endCanvasHistoryBatch}
+      />
+      <ToolbarActionButton
+        compact={compact}
+        label={t('canvas.autoFit')}
+        icon={<ScanSearch size={16} />}
+        onClick={handleAutoFitCanvas}
+        disabled={!canAutoFitCanvas}
+      />
+      <IconButton
+        aria-label={snapToGrid ? t('snap.on') : t('snap.off')}
+        w="40px"
+        h="40px"
+        rounded="var(--radius-l)"
+        variant={snapToGrid ? 'solid' : 'surface'}
+        borderWidth="1px"
+        onClick={toggleSnap}
+        title={snapToGrid ? t('snap.on') : t('snap.off')}
+      >
+        <Magnet size={16} />
+      </IconButton>
+      <ToolbarActionButton
+        compact={compact}
+        label={canvasRegistered ? t('canvas.deactivate') : t('canvas.register')}
+        tooltip={canvasRegistered ? t('canvas.registered') : t('canvas.unregistered')}
+        icon={<FilePlus2 size={16} />}
+        variant={canvasRegistered ? 'solid' : 'surface'}
+        onClick={handleToggleRegister}
+      />
+    </>
+  )
+
   return (
     <Flex position="relative" h="100vh" w="100vw" p="2.5" direction="column" gap="2.5" overflow="hidden">
-      <HStack h="48px" flexShrink={0} gap="2.5" align="center">
-        <LayoutSelector
-          layouts={layouts}
-          activeLayout={activeLayout}
-          onSwitch={switchLayout}
-          onCreate={createLayout}
-          onDelete={deleteLayout}
-        />
-
-        {activeLayout && (
-          <InlineEdit
-            value={activeLayout.name}
-            onCommit={name => renameLayout(activeLayout.id, name)}
-          />
-        )}
-
-        <Button
-          h="40px"
-          px="3.5"
-          rounded="var(--radius-l)"
-          variant="surface"
-          borderWidth="1px"
-          onClick={() => setStudioImportOpen(true)}
-          title={t('studioImport.title')}
-        >
-          <FolderInput size={16} />
-          {t('studioImport.button')}
-        </Button>
-
-        <Box flex="1" />
-
-        <GridSizeInput
-          label={t('gridSize.width')}
-          ariaLabel={t('gridSize.widthLabel')}
-          value={canvasWidth}
-          onCommit={v => updateCanvasBounds({ width: v })}
-          onEditStart={beginCanvasHistoryBatch}
-          onEditEnd={endCanvasHistoryBatch}
-        />
-        <GridSizeInput
-          label={t('gridSize.height')}
-          ariaLabel={t('gridSize.heightLabel')}
-          value={canvasHeight}
-          onCommit={v => updateCanvasBounds({ height: v })}
-          onEditStart={beginCanvasHistoryBatch}
-          onEditEnd={endCanvasHistoryBatch}
-        />
-        <Button
-          h="40px"
-          px="3.5"
-          rounded="var(--radius-l)"
-          variant="surface"
-          borderWidth="1px"
-          onClick={handleAutoFitCanvas}
-          disabled={!canAutoFitCanvas}
-          title={t('canvas.autoFit')}
-        >
-          <ScanSearch size={16} />
-          {t('canvas.autoFit')}
-        </Button>
-        <IconButton
-          aria-label={snapToGrid ? t('snap.on') : t('snap.off')}
-          w="40px"
-          h="40px"
-          rounded="var(--radius-l)"
-          variant={snapToGrid ? 'solid' : 'surface'}
-          borderWidth="1px"
-          onClick={toggleSnap}
-          title={snapToGrid ? t('snap.on') : t('snap.off')}
-        >
-          <Magnet size={16} />
-        </IconButton>
-        <Button
-          h="40px"
-          px="3.5"
-          rounded="var(--radius-l)"
-          variant={canvasRegistered ? 'solid' : 'surface'}
-          borderWidth="1px"
-          onClick={handleToggleRegister}
-          title={canvasRegistered ? t('canvas.registered') : t('canvas.unregistered')}
-        >
-          <FilePlus2 size={16} />
-          {canvasRegistered ? t('canvas.deactivate') : t('canvas.register')}
-        </Button>
+      <HStack ref={toolbarRef} h="48px" flexShrink={0} gap="2.5" align="center" minW="0" overflow="hidden">
+        {renderToolbarContents(toolbarCompact)}
+      </HStack>
+      <HStack
+        ref={toolbarMeasureRef}
+        h="48px"
+        gap="2.5"
+        align="center"
+        position="absolute"
+        top="-9999px"
+        left="0"
+        w="max-content"
+        visibility="hidden"
+        pointerEvents="none"
+        aria-hidden="true"
+      >
+        {renderToolbarContents(false)}
       </HStack>
 
       <Flex flex="1" gap="2.5" minH="0">
