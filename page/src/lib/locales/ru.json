@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "Спасибо! Количество LED на всех устройствах теперь совпадает с макетом старой версии. Можно продолжить импорт.",
   "studioImport.ledMismatch.stepsTitle": "Шаги:",
   "studioImport.ledMismatch.step1": "Щёлкните правой кнопкой по устройству в списке слева и выберите «Редактировать LED»",
-  "studioImport.ledMismatch.step2": "В простом режиме измените количество LED до нужного значения и сохраните",
+  "studioImport.ledMismatch.step2": "Нажмите «Добавить сегмент LED», выберите «Полоса», задайте «Количество LED» нужным значением и сохраните",
   "studioImport.ledMismatch.step3": "Вернитесь сюда и нажмите «Обновить статус устройств»",
   "studioImport.ledMismatch.refresh": "Обновить статус устройств",
   "studioImport.ledMismatch.forceImport": "Импортировать всё равно (позиции LED могут быть неполными)"

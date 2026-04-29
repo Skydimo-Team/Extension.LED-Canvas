@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "感谢配合！所有设备的灯珠数量已与老版本布局一致，可以继续导入。",
   "studioImport.ledMismatch.stepsTitle": "操作步骤：",
   "studioImport.ledMismatch.step1": "右键左侧设备列表中的设备，选择「编辑 LED」",
-  "studioImport.ledMismatch.step2": "在简易模式下将灯珠调整为目标值，然后保存",
+  "studioImport.ledMismatch.step2": "点击「添加灯珠段」，选择「灯带」，将「灯珠数量」设为目标值，然后保存",
   "studioImport.ledMismatch.step3": "回到此页面，点击下方「刷新设备状态」",
   "studioImport.ledMismatch.refresh": "刷新设备状态",
   "studioImport.ledMismatch.forceImport": "仍然导入（灯珠位置可能不完整）"

@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "Merci ! Tous les nombres de LED correspondent désormais à la disposition héritée. Vous pouvez poursuivre l’import.",
   "studioImport.ledMismatch.stepsTitle": "Étapes :",
   "studioImport.ledMismatch.step1": "Faites un clic droit sur l’appareil dans la liste de gauche, puis sélectionnez \"Modifier les LED\"",
-  "studioImport.ledMismatch.step2": "En mode simple, ajustez le nombre de LED à la valeur cible, puis enregistrez",
+  "studioImport.ledMismatch.step2": "Cliquez sur \"Ajouter un segment LED\", choisissez \"Ligne\", définissez \"Nombre de LED\" sur la valeur cible, puis enregistrez",
   "studioImport.ledMismatch.step3": "Revenez ici puis cliquez sur \"Actualiser l’état de l’appareil\" ci-dessous",
   "studioImport.ledMismatch.refresh": "Actualiser l’état de l’appareil",
   "studioImport.ledMismatch.forceImport": "Importer quand même (les positions des LED peuvent être incomplètes)"

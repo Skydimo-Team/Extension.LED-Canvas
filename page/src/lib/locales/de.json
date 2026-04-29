@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "Danke! Alle LED-Anzahlen stimmen jetzt mit dem Legacy-Layout überein. Sie können mit dem Import fortfahren.",
   "studioImport.ledMismatch.stepsTitle": "Schritte:",
   "studioImport.ledMismatch.step1": "Klicken Sie in der linken Geräteliste mit der rechten Maustaste auf das Gerät und wählen Sie \"LEDs bearbeiten\"",
-  "studioImport.ledMismatch.step2": "Passen Sie im einfachen Modus die LED-Anzahl auf den Zielwert an und speichern Sie",
+  "studioImport.ledMismatch.step2": "Klicken Sie auf \"LED-Segment hinzufügen\", wählen Sie \"Linie\", setzen Sie die \"LED-Anzahl\" auf den Zielwert und speichern Sie",
   "studioImport.ledMismatch.step3": "Kehren Sie hierher zurück und klicken Sie unten auf \"Gerätestatus aktualisieren\"",
   "studioImport.ledMismatch.refresh": "Gerätestatus aktualisieren",
   "studioImport.ledMismatch.forceImport": "Trotzdem importieren (LED-Positionen können unvollständig sein)"

@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "Thank you! All device LED counts now match the legacy layout. You can proceed to import.",
   "studioImport.ledMismatch.stepsTitle": "Steps:",
   "studioImport.ledMismatch.step1": "Right-click the device in the left device list, select \"Edit LEDs\"",
-  "studioImport.ledMismatch.step2": "In Simple Mode, adjust the LED count to the target value, then save",
+  "studioImport.ledMismatch.step2": "Click \"Add LED Segment\", choose \"Line\", set \"LED Count\" to the target value, then save",
   "studioImport.ledMismatch.step3": "Come back here and click \"Refresh device status\" below",
   "studioImport.ledMismatch.refresh": "Refresh device status",
   "studioImport.ledMismatch.forceImport": "Import anyway (LED positions may be incomplete)"

@@ -97,7 +97,7 @@
   "studioImport.ledMismatch.resolved.guide": "Teşekkürler! Tüm cihaz LED sayıları artık eski sürüm düzeniyle eşleşiyor. İçe aktarmaya devam edebilirsiniz.",
   "studioImport.ledMismatch.stepsTitle": "Adımlar:",
   "studioImport.ledMismatch.step1": "Sol cihaz listesinde cihaza sağ tıklayın ve \"LED Düzenle\"yi seçin",
-  "studioImport.ledMismatch.step2": "Basit modda LED sayısını hedef değere ayarlayın ve kaydedin",
+  "studioImport.ledMismatch.step2": "\"LED Segmenti Ekle\"ye tıklayın, \"Şerit\"i seçin, \"LED Sayısı\"nı hedef değere ayarlayın ve kaydedin",
   "studioImport.ledMismatch.step3": "Buraya dönüp \"Cihaz durumunu yenile\"ye tıklayın",
   "studioImport.ledMismatch.refresh": "Cihaz durumunu yenile",
   "studioImport.ledMismatch.forceImport": "Yine de içe aktar (LED konumları eksik olabilir)"
