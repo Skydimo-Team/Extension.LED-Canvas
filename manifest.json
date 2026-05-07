@@ -4,8 +4,11 @@
   "name": "meta.name",
   "publisher": "Skydimo",
   "type": "extension",
-  "language": "lua",
-  "entry": "init.lua",
+  "language": "native-c",
+  "abi": "skydimo-extension-c-v2",
+  "entry": {
+    "windows-x86_64": "native/windows-x86_64/led_canvas.dll"
+  },
   "page": "page/dist/index.html",
   "permissions": [],
   "description": "meta.description",

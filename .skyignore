@@ -22,3 +22,12 @@ page/vite.config.ts
 page/tsconfig.json
 page/tsconfig.app.json
 page/tsconfig.node.json
+
+# Runtime import only needs the manifest, locales, built page, and native library.
+Cargo.toml
+Cargo.lock
+build-native.ps1
+src/
+target/
+init.lua
+lib/
