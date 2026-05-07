@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import { setLocale } from './i18n'
-import type { Device, LedColor, Output, TreeDevice, StudioScanResult, StudioImportResult, StudioResolvedMatch } from '@/types'
+import type { Device, Output, TreeDevice, StudioScanResult, StudioImportResult, StudioResolvedMatch } from '@/types'
 import type { CanvasBounds, PlacedDevice } from './canvasStore'
 
 /* ── Connection info resolution ── */
@@ -82,8 +82,8 @@ export interface LayoutVirtualDeviceState {
 }
 
 export interface LayoutPreviewFrame {
-  canvas: LedColor[]
-  placementsById: Record<string, LedColor[]>
+  canvas: Uint8Array
+  placementsById: Record<string, Uint8Array>
 }
 
 export interface LayoutInfo {
@@ -280,22 +280,20 @@ function normalizeDevices(devices: unknown): TreeDevice[] {
   }))
 }
 
-function normalizeLedColors(colors: unknown): LedColor[] {
-  const rawColors = Array.isArray(colors) ? colors : []
-  return rawColors.flatMap((color) => {
-    if (!color || typeof color !== 'object') return []
+function decodeRgbBase64(value: unknown): Uint8Array {
+  if (typeof value !== 'string' || value.length === 0) return new Uint8Array(0)
 
-    const r = Number((color as LedColor).r)
-    const g = Number((color as LedColor).g)
-    const b = Number((color as LedColor).b)
-    if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return []
-
-    return [{
-      r: Math.max(0, Math.min(255, Math.round(r))),
-      g: Math.max(0, Math.min(255, Math.round(g))),
-      b: Math.max(0, Math.min(255, Math.round(b))),
-    }]
-  })
+  try {
+    const binary = atob(value)
+    const len = binary.length - (binary.length % 3)
+    const bytes = new Uint8Array(len)
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary.charCodeAt(i) & 0xff
+    }
+    return bytes
+  } catch {
+    return new Uint8Array(0)
+  }
 }
 
 function normalizeLayouts(layouts: unknown): LayoutInfo[] {
@@ -359,19 +357,37 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     set({ devices: normalized })
   }
 
-  function normalizePlacementPreviewMap(placements: unknown): Record<string, LedColor[]> {
+  let pendingPreviewFrames = new Map<string, Record<string, unknown>>()
+  let previewFlushFrame: number | null = null
+
+  function normalizePlacementPreviewMap(placements: unknown): Record<string, Uint8Array> {
     if (!Array.isArray(placements)) return {}
 
-    return placements.reduce<Record<string, LedColor[]>>((acc, placement) => {
+    return placements.reduce<Record<string, Uint8Array>>((acc, placement) => {
       if (!placement || typeof placement !== 'object') return acc
 
       const payload = placement as Record<string, unknown>
       const placementId = typeof payload.placement_id === 'string' ? payload.placement_id : null
       if (!placementId) return acc
 
-      acc[placementId] = normalizeLedColors(payload.colors)
+      acc[placementId] = decodeRgbBase64(payload.colors_rgb)
       return acc
     }, {})
+  }
+
+  function decodePreviewFrame(data: Record<string, unknown>): LayoutPreviewFrame | null {
+    return {
+      canvas: decodeRgbBase64(data.canvas_rgb),
+      placementsById: normalizePlacementPreviewMap(data.placements),
+    }
+  }
+
+  function cancelPreviewFlush() {
+    if (previewFlushFrame != null) {
+      cancelAnimationFrame(previewFlushFrame)
+      previewFlushFrame = null
+    }
+    pendingPreviewFrames = new Map()
   }
 
   function retainRegisteredPreviews(
@@ -389,19 +405,32 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     )
   }
 
-  function applyPreviewFrame(data: Record<string, unknown>) {
+  function flushPreviewFrames() {
+    previewFlushFrame = null
+    const frames = Array.from(pendingPreviewFrames.entries())
+    pendingPreviewFrames.clear()
+    if (frames.length === 0) return
+
+    set(s => {
+      const previewByLayoutId = { ...s.previewByLayoutId }
+      for (const [layoutId, data] of frames) {
+        const frame = decodePreviewFrame(data)
+        if (frame) {
+          previewByLayoutId[layoutId] = frame
+        }
+      }
+      return { previewByLayoutId }
+    })
+  }
+
+  function queuePreviewFrame(data: Record<string, unknown>) {
     const layoutId = typeof data.layout_id === 'string' ? data.layout_id : null
     if (!layoutId) return
 
-    set(s => ({
-      previewByLayoutId: {
-        ...s.previewByLayoutId,
-        [layoutId]: {
-          canvas: normalizeLedColors(data.canvas),
-          placementsById: normalizePlacementPreviewMap(data.placements),
-        },
-      },
-    }))
+    pendingPreviewFrames.set(layoutId, data)
+    if (previewFlushFrame == null) {
+      previewFlushFrame = requestAnimationFrame(flushPreviewFrames)
+    }
   }
 
   function applyFullState(data: Record<string, unknown>) {
@@ -481,7 +510,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
             if (layoutId) acknowledgeEffectParamSync(layoutId, syncSeq)
           }
           if (data?.type === 'preview_frame') {
-            applyPreviewFrame(data as Record<string, unknown>)
+            queuePreviewFrame(data as Record<string, unknown>)
           }
           if (data?.type === 'effects_catalog') {
             set({ effects: normalizeEffects((data as Record<string, unknown>).effects) })
@@ -498,6 +527,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
     ws.onclose = () => {
       resetEffectParamSyncs()
+      cancelPreviewFlush()
       set({
         status: 'disconnected',
         previewByLayoutId: {},
@@ -636,6 +666,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     disconnect() {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
       resetEffectParamSyncs()
+      cancelPreviewFlush()
       if (ws) { ws.close(); ws = null }
       lastDeviceHash = ''
       set({

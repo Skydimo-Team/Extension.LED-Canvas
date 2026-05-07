@@ -263,14 +263,14 @@ impl LedCanvasExtension {
             .map(|output| {
                 json!({
                     "placement_id": output.placement_id,
-                    "colors": output.preview_json,
+                    "colors_rgb": output.preview_rgb,
                 })
             })
             .collect::<Vec<_>>();
         self.page_emit(json!({
             "type": "preview_frame",
             "layout_id": layout_id,
-            "canvas": routing::canvas_json(canvas_frame),
+            "canvas_rgb": routing::rgb_vec_base64(canvas_frame),
             "placements": placements,
         }));
     }

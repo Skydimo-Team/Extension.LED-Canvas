@@ -1704,23 +1704,48 @@ local function clamp_preview_channel(value)
     return n
 end
 
-local function rgb_bytes_to_led_colors(rgb_bytes)
-    local colors = {}
+local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function append_rgb_base64(out, r, g, b)
+    local packed = clamp_preview_channel(r) * 65536
+        + clamp_preview_channel(g) * 256
+        + clamp_preview_channel(b)
+
+    out[#out + 1] = BASE64_ALPHABET:sub(math.floor(packed / 262144) % 64 + 1, math.floor(packed / 262144) % 64 + 1)
+    out[#out + 1] = BASE64_ALPHABET:sub(math.floor(packed / 4096) % 64 + 1, math.floor(packed / 4096) % 64 + 1)
+    out[#out + 1] = BASE64_ALPHABET:sub(math.floor(packed / 64) % 64 + 1, math.floor(packed / 64) % 64 + 1)
+    out[#out + 1] = BASE64_ALPHABET:sub(packed % 64 + 1, packed % 64 + 1)
+end
+
+local function rgb_bytes_to_base64(rgb_bytes)
     if type(rgb_bytes) ~= "table" then
-        return colors
+        return ""
     end
 
-    local count = math.floor(#rgb_bytes / 3)
-    for i = 1, count do
-        local base = (i - 1) * 3 + 1
-        colors[i] = {
-            r = clamp_preview_channel(rgb_bytes[base]),
-            g = clamp_preview_channel(rgb_bytes[base + 1]),
-            b = clamp_preview_channel(rgb_bytes[base + 2]),
-        }
+    local out = {}
+    local len = #rgb_bytes - (#rgb_bytes % 3)
+    for i = 1, len, 3 do
+        append_rgb_base64(out, rgb_bytes[i], rgb_bytes[i + 1], rgb_bytes[i + 2])
     end
 
-    return colors
+    return table.concat(out)
+end
+
+local function led_colors_to_base64(colors)
+    if type(colors) ~= "table" then
+        return ""
+    end
+
+    local out = {}
+    for _, color in ipairs(colors) do
+        if type(color) == "table" then
+            append_rgb_base64(out, color.r, color.g, color.b)
+        else
+            append_rgb_base64(out, 0, 0, 0)
+        end
+    end
+
+    return table.concat(out)
 end
 
 local function emit_layout_preview(layout_id, canvas_output, routed)
@@ -1730,7 +1755,7 @@ local function emit_layout_preview(layout_id, canvas_output, routed)
         if type(entry) == "table" and type(entry.placementId) == "string" and entry.placementId ~= "" then
             placements[#placements + 1] = {
                 placement_id = entry.placementId,
-                colors = type(entry.preview) == "table" and entry.preview or {},
+                colors_rgb = led_colors_to_base64(entry.preview),
             }
         end
     end
@@ -1738,7 +1763,7 @@ local function emit_layout_preview(layout_id, canvas_output, routed)
     ext.page_emit({
         type = "preview_frame",
         layout_id = layout_id,
-        canvas = rgb_bytes_to_led_colors(canvas_output),
+        canvas_rgb = rgb_bytes_to_base64(canvas_output),
         placements = placements,
     })
 end

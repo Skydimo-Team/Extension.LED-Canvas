@@ -4,14 +4,14 @@ import type Konva from 'konva'
 import { useCanvasStore, beginCanvasHistoryBatch, endCanvasHistoryBatch, computeMismatchFlags } from '@/lib/canvasStore'
 import { useBridgeStore } from '@/lib/bridge'
 import type { PlacedDevice } from '@/lib/canvasStore'
-import type { LedColor, Matrix, TreeDevice } from '@/types'
+import type { Matrix, TreeDevice } from '@/types'
 import { t } from '@/lib/i18n'
 
 /* ── Default canvas bounds ── */
 const DEFAULT_CANVAS_W = 64
 const DEFAULT_CANVAS_H = 64
 const MIN_CANVAS_SIDE = 1
-const EMPTY_LED_COLORS: LedColor[] = []
+const EMPTY_RGB_SEGMENT = new Uint8Array(0)
 
 /* ── Grid cell constants: 1 cell = 1 LED point ── */
 const CELL_SIZE = 1
@@ -80,20 +80,25 @@ function mixChannel(value: number, target: number, amount: number) {
   return Math.round(value + (target - value) * amount)
 }
 
-function hasVisibleColor(color: LedColor | undefined) {
-  return !!color && (color.r > 0 || color.g > 0 || color.b > 0)
+function rgbSegmentBase(segment: Uint8Array | undefined, index: number) {
+  const base = index * 3
+  return segment && base >= 0 && base + 2 < segment.length ? base : -1
 }
 
-function canvasPreviewFill(color: LedColor) {
-  return `rgba(${mixChannel(color.r, 255, 0.56)}, ${mixChannel(color.g, 255, 0.56)}, ${mixChannel(color.b, 255, 0.56)}, 0.78)`
+function hasVisibleRgb(segment: Uint8Array, base: number) {
+  return segment[base] > 0 || segment[base + 1] > 0 || segment[base + 2] > 0
 }
 
-function devicePreviewFill(color: LedColor) {
-  return `rgba(${mixChannel(color.r, 0, 0.12)}, ${mixChannel(color.g, 0, 0.12)}, ${mixChannel(color.b, 0, 0.12)}, 0.96)`
+function canvasPreviewFill(r: number, g: number, b: number) {
+  return `rgba(${mixChannel(r, 255, 0.56)}, ${mixChannel(g, 255, 0.56)}, ${mixChannel(b, 255, 0.56)}, 0.78)`
 }
 
-function devicePreviewStroke(color: LedColor) {
-  return `rgba(${mixChannel(color.r, 0, 0.28)}, ${mixChannel(color.g, 0, 0.28)}, ${mixChannel(color.b, 0, 0.28)}, 0.98)`
+function devicePreviewFill(r: number, g: number, b: number) {
+  return `rgba(${mixChannel(r, 0, 0.12)}, ${mixChannel(g, 0, 0.12)}, ${mixChannel(b, 0, 0.12)}, 0.96)`
+}
+
+function devicePreviewStroke(r: number, g: number, b: number) {
+  return `rgba(${mixChannel(r, 0, 0.28)}, ${mixChannel(g, 0, 0.28)}, ${mixChannel(b, 0, 0.28)}, 0.98)`
 }
 
 interface LivePlacementInfo {
@@ -402,7 +407,7 @@ export function VisualGrid() {
   }
 
   const activeLayoutPreview = activeLayoutId ? previewByLayoutId[activeLayoutId] : undefined
-  const canvasPreviewColors = activeLayoutPreview?.canvas ?? EMPTY_LED_COLORS
+  const canvasPreviewColors = activeLayoutPreview?.canvas ?? EMPTY_RGB_SEGMENT
 
   const livePlacementLookup = useMemo(() => buildLivePlacementLookup(liveDevices), [liveDevices])
   const placementWarningById = useMemo(() => {
@@ -597,16 +602,20 @@ export function VisualGrid() {
     const gap = CANVAS_PREVIEW_GAP_RATIO
     const cellInset = gap / 2
     const cellSize = Math.max(0.08, 1 - gap)
+    const count = Math.floor(canvasPreviewColors.length / 3)
 
-    for (let i = 0; i < canvasPreviewColors.length; i++) {
-      const color = canvasPreviewColors[i]
-      if (!hasVisibleColor(color)) continue
+    for (let i = 0; i < count; i++) {
+      const base = i * 3
+      const r = canvasPreviewColors[base]
+      const g = canvasPreviewColors[base + 1]
+      const b = canvasPreviewColors[base + 2]
+      if (r === 0 && g === 0 && b === 0) continue
 
       const col = i % canvasRect.width
       const row = Math.floor(i / canvasRect.width)
       if (row >= canvasRect.height) break
 
-      canvas.fillStyle = canvasPreviewFill(color)
+      canvas.fillStyle = canvasPreviewFill(r, g, b)
       canvas.fillRect(
         canvasRect.x + col + cellInset,
         canvasRect.y + row + cellInset,
@@ -1465,18 +1474,28 @@ export function VisualGrid() {
                   ) : (
                     <Group key={i} listening={false}>
                       {(() => {
-                        const previewColor = placementColors?.[led.index]
-                        const hasPreview = previewColor != null
-                        const showLiveColor = hasVisibleColor(previewColor)
+                        const previewBase = rgbSegmentBase(placementColors, led.index)
+                        const hasPreview = previewBase >= 0
+                        const showLiveColor = hasPreview && placementColors
+                          ? hasVisibleRgb(placementColors, previewBase)
+                          : false
                         let fill = c.ledFill
                         let stroke = c.ledStroke
 
                         if (blocked.has(led.index)) {
                           fill = c.ledLockedFill
                           stroke = c.ledLockedStroke
-                        } else if (showLiveColor && previewColor) {
-                          fill = devicePreviewFill(previewColor)
-                          stroke = devicePreviewStroke(previewColor)
+                        } else if (showLiveColor && placementColors) {
+                          fill = devicePreviewFill(
+                            placementColors[previewBase],
+                            placementColors[previewBase + 1],
+                            placementColors[previewBase + 2],
+                          )
+                          stroke = devicePreviewStroke(
+                            placementColors[previewBase],
+                            placementColors[previewBase + 1],
+                            placementColors[previewBase + 2],
+                          )
                         } else if (hasPreview) {
                           fill = c.ledOffFill
                           stroke = c.ledOffStroke

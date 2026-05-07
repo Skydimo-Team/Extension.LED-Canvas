@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use serde_json::{json, Value};
-
 use crate::abi::{SkydimoLedColorV1, SkydimoRgb};
 use crate::model::{placement_routing_key, RuntimePlacement, Matrix};
 
@@ -60,7 +58,7 @@ pub struct RouteOutput {
     pub output_id: String,
     pub placement_id: String,
     pub colors: Vec<SkydimoLedColorV1>,
-    pub preview_json: Value,
+    pub preview_rgb: String,
 }
 
 pub fn build(placements: &[RuntimePlacement], grid_width: usize, grid_height: usize) -> RoutingTable {
@@ -204,16 +202,26 @@ pub fn route(canvas: &[SkydimoRgb], table: &RoutingTable) -> Vec<RouteOutput> {
             output_id: entry.output_id.clone(),
             placement_id: entry.placement_id.clone(),
             colors: color_values,
-            preview_json: rgb_vec_json(&preview),
+            preview_rgb: rgb_vec_base64(&preview),
         });
     }
 
     outputs
 }
 
-pub fn canvas_json(canvas: &[SkydimoRgb]) -> Value {
-    rgb_vec_json(canvas)
+pub fn rgb_vec_base64(colors: &[SkydimoRgb]) -> String {
+    let mut encoded = String::with_capacity(colors.len().saturating_mul(4));
+    for color in colors {
+        let packed = (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b);
+        encoded.push(BASE64[(packed >> 18) as usize] as char);
+        encoded.push(BASE64[((packed >> 12) & 0x3f) as usize] as char);
+        encoded.push(BASE64[((packed >> 6) & 0x3f) as usize] as char);
+        encoded.push(BASE64[(packed & 0x3f) as usize] as char);
+    }
+    encoded
 }
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn led_grid_dims(placement: &RuntimePlacement) -> (usize, usize) {
     if let Some(matrix) = placement.matrix.as_ref() {
@@ -462,15 +470,6 @@ fn polygon_area(points: &[Point]) -> f64 {
         prev = *curr;
     }
     area.abs() * 0.5
-}
-
-fn rgb_vec_json(colors: &[SkydimoRgb]) -> Value {
-    Value::Array(
-        colors
-            .iter()
-            .map(|color| json!({ "r": color.r, "g": color.g, "b": color.b }))
-            .collect(),
-    )
 }
 
 fn to_u8(value: f64) -> u8 {
