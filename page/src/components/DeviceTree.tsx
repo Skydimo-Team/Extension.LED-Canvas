@@ -534,7 +534,7 @@ function DeviceNode({ device, isLast, onRequestRemove }: { device: TreeDevice; i
 /* ── Main panel ── */
 export function DeviceTree() {
   useLocale()
-  const { status, devices, connect, requestDevices } = useBridgeStore()
+  const { status, devices, requestDevices } = useBridgeStore()
   const removeDevice = useCanvasStore(s => s.removeDevice)
   const [filter, setFilter] = useState('')
   const [pendingRemoval, setPendingRemoval] = useState<{ id: string; name: string } | null>(null)
@@ -547,8 +547,6 @@ export function DeviceTree() {
       return label.includes(q)
     })
   }, [devices, filter])
-
-  useEffect(() => { connect() }, [connect])
 
   const handleRefresh = useCallback(() => { requestDevices() }, [requestDevices])
 

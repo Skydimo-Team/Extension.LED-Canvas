@@ -461,6 +461,8 @@ function App() {
   const previewPlacements = useBridgeStore(s => s.previewPlacements)
   const clearPlacementPreview = useBridgeStore(s => s.clearPlacementPreview)
   const updateSnap = useBridgeStore(s => s.updateSnap)
+  const connectBridge = useBridgeStore(s => s.connect)
+  const disconnectBridge = useBridgeStore(s => s.disconnect)
   const [studioImportOpen, setStudioImportOpen] = useState(false)
   const [toolbarCompact, setToolbarCompact] = useState(false)
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -478,6 +480,11 @@ function App() {
   const canAutoFitCanvas = autoFitCanvasBounds != null
     && !sameCanvasBounds(canvasBounds, autoFitCanvasBounds)
     && !editingDeviceId
+
+  useEffect(() => {
+    connectBridge()
+    return () => disconnectBridge()
+  }, [connectBridge, disconnectBridge])
 
   const measureToolbarCompact = useCallback(() => {
     const toolbarEl = toolbarRef.current

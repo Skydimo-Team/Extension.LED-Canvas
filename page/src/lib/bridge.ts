@@ -143,6 +143,7 @@ interface BridgeState {
 let ws: WebSocket | null = null
 let rpcId = 1
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let shouldReconnect = false
 let lastDeviceHash = ''
 let effectParamSyncSeq = 1
 
@@ -467,19 +468,27 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
   }
 
   function doConnect() {
+    shouldReconnect = true
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
 
     set({ status: 'connecting' })
-    ws = new WebSocket(PAGE.wsUrl)
+    const socket = new WebSocket(PAGE.wsUrl)
+    ws = socket
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (ws !== socket) return
       set({ status: 'connected' })
       get().requestDevices()
       get().requestEffects()
       get().requestFullState()
     }
 
-    ws.onmessage = (evt) => {
+    socket.onmessage = (evt) => {
+      if (ws !== socket) return
       let msg: Record<string, unknown>
       try { msg = JSON.parse(evt.data) } catch { return }
 
@@ -525,17 +534,24 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
       }
     }
 
-    ws.onclose = () => {
+    socket.onclose = () => {
+      if (ws !== socket) return
+      ws = null
       resetEffectParamSyncs()
       cancelPreviewFlush()
       set({
         status: 'disconnected',
         previewByLayoutId: {},
       })
-      reconnectTimer = setTimeout(doConnect, 3000)
+      if (shouldReconnect && !reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          doConnect()
+        }, 3000)
+      }
     }
 
-    ws.onerror = () => { /* onclose will fire */ }
+    socket.onerror = () => { /* onclose will fire */ }
   }
 
   return {
@@ -664,6 +680,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     },
 
     disconnect() {
+      shouldReconnect = false
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
       resetEffectParamSyncs()
       cancelPreviewFlush()

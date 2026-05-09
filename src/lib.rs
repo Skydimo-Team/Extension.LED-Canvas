@@ -52,6 +52,7 @@ struct LedCanvasExtension {
     preview_overrides: HashMap<String, PreviewOverride>,
     rng: IdGenerator,
     data_dir: PathBuf,
+    started: bool,
 }
 
 impl LedCanvasExtension {
@@ -66,10 +67,14 @@ impl LedCanvasExtension {
             preview_overrides: HashMap::new(),
             rng,
             data_dir: PathBuf::new(),
+            started: false,
         }
     }
 
     fn start(&mut self) -> Result<(), String> {
+        if self.started {
+            self.stop()?;
+        }
         self.host.log_info("LED Canvas native extension started");
         self.data_dir = self
             .host
@@ -81,6 +86,7 @@ impl LedCanvasExtension {
             self.host
                 .log_warn(&format!("failed to create LED Canvas data dir: {err}"));
         }
+        self.started = true;
 
         let devices = self.get_devices();
         let lookup = DeviceLookup::from_devices(&devices);
@@ -110,6 +116,10 @@ impl LedCanvasExtension {
     }
 
     fn stop(&mut self) -> Result<(), String> {
+        if !self.started {
+            return Ok(());
+        }
+        self.started = false;
         let registered = self
             .config
             .layouts
@@ -1534,6 +1544,12 @@ impl LedCanvasExtension {
             "success": true,
             "layout_id": layout_id,
         }));
+    }
+}
+
+impl Drop for LedCanvasExtension {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 

@@ -6,7 +6,14 @@ import App from './App.tsx'
 import { useLocale } from './lib/i18n'
 import { chakraSystem } from './styles/theme'
 
-document.addEventListener('contextmenu', e => e.preventDefault())
+const preventContextMenu = (event: MouseEvent) => event.preventDefault()
+document.addEventListener('contextmenu', preventContextMenu)
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    document.removeEventListener('contextmenu', preventContextMenu)
+  })
+}
 
 function AppWithProviders() {
   const locale = useLocale()

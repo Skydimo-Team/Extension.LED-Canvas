@@ -283,6 +283,8 @@
     const WS_URL = PAGE.wsUrl || 'ws://127.0.0.1:42070';
 
     let ws = null;
+    let reconnectTimer = null;
+    let shouldReconnect = false;
     let rpcId = 1;
     let devicesCache = [];
     let selectedPort = null;
@@ -493,17 +495,29 @@
     }
 
     function connect() {
-      if (ws) { try { ws.close(); } catch (_) {} }
+      shouldReconnect = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (ws) {
+        const previous = ws;
+        ws = null;
+        try { previous.close(); } catch (_) {}
+      }
       setStatus('连接中...', 'connecting');
-      ws = new WebSocket(WS_URL);
+      const socket = new WebSocket(WS_URL);
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
+        if (ws !== socket) return;
         setStatus('已连接', 'connected');
         log('WebSocket 已连接');
         requestDevices();
       };
 
-      ws.onmessage = (evt) => {
+      socket.onmessage = (evt) => {
+        if (ws !== socket) return;
         let msg;
         try { msg = JSON.parse(evt.data); } catch (e) { return; }
 
@@ -528,18 +542,40 @@
         }
       };
 
-      ws.onclose = () => {
+      socket.onclose = () => {
+        if (ws !== socket) return;
+        ws = null;
         setStatus('已断开，3 秒后重连...', 'disconnected');
         log('WebSocket 连接关闭');
-        setTimeout(connect, 3000);
+        if (shouldReconnect && !reconnectTimer) {
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, 3000);
+        }
       };
 
-      ws.onerror = (err) => {
+      socket.onerror = (err) => {
         log('WebSocket 错误');
       };
     }
 
+    function cleanupPage() {
+      shouldReconnect = false;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (ws) {
+        const socket = ws;
+        ws = null;
+        try { socket.close(); } catch (_) {}
+      }
+    }
+
     document.getElementById('refresh').addEventListener('click', requestDevices);
+    window.addEventListener('pagehide', cleanupPage);
+    window.addEventListener('beforeunload', cleanupPage);
 
     // Start connection
     connect();
