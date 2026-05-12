@@ -1,33 +1,24 @@
-# Keep Lua runtime files and built page output only.
+# Native extension: exclude Rust/native build inputs and npm page sources.
 .git
 .gitignore
+.skyignore
 .DS_Store
 Thumbs.db
 *.tmp
 *.log
 
-README.md
-
-page/.gitignore
-page/index.html
-page/node_modules/
-page/src/
-page/public/
-page/package.json
-page/package-lock.json
-page/README.md
-page/components.json
-page/eslint.config.js
-page/vite.config.ts
-page/tsconfig.json
-page/tsconfig.app.json
-page/tsconfig.node.json
-
-# Runtime import only needs the manifest, locales, built page, and native library.
 Cargo.toml
 Cargo.lock
+build.rs
 build-native.ps1
 src/
 target/
-init.lua
-lib/
+native/src/
+native/target/
+native/dist/
+
+# Keep the built extension page only.
+page/*
+page/.*
+!page/dist/
+!page/dist/**
