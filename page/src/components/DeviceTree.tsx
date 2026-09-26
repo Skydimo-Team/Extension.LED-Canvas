@@ -534,7 +534,7 @@ function DeviceNode({ device, isLast, onRequestRemove }: { device: TreeDevice; i
 /* ── Main panel ── */
 export function DeviceTree() {
   useLocale()
-  const { status, devices, requestDevices } = useBridgeStore()
+  const { status, devices, requestDevices, lastError } = useBridgeStore()
   const removeDevice = useCanvasStore(s => s.removeDevice)
   const [filter, setFilter] = useState('')
   const [pendingRemoval, setPendingRemoval] = useState<{ id: string; name: string } | null>(null)
@@ -576,7 +576,7 @@ export function DeviceTree() {
           bg={status === 'connected' ? 'green.500' : status === 'connecting' ? 'orange.400' : 'fg.muted'}
           opacity={status === 'disconnected' ? 0.25 : 1}
           animation={status === 'connecting' ? 'pulse 1.5s ease-in-out infinite' : undefined}
-          title={status === 'connected' ? t('device.connected') : status === 'connecting' ? t('device.connecting') : t('device.disconnected')}
+          title={lastError ?? (status === 'connected' ? t('device.connected') : status === 'connecting' ? t('device.connecting') : t('device.disconnected'))}
         />
         <IconButton
           aria-label={t('device.refresh')}

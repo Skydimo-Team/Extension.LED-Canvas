@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand'
 import { setLocale } from './i18n'
+import { authenticateExtensionSocket } from './extensionPageSession.js'
 import type { Device, Output, TreeDevice, StudioScanResult, StudioImportResult, StudioResolvedMatch } from '@/types'
 import type { CanvasBounds, PlacedDevice } from './canvasStore'
 
@@ -100,6 +101,7 @@ export interface LayoutInfo {
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected'
 
 interface BridgeState {
+  lastError: string | null
   status: ConnectionStatus
   devices: TreeDevice[]
   previewByLayoutId: Record<string, LayoutPreviewFrame>
@@ -481,7 +483,7 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
 
     socket.onopen = () => {
       if (ws !== socket) return
-      set({ status: 'connected' })
+      set({ status: 'connected', lastError: null })
       get().requestDevices()
       get().requestEffects()
       get().requestFullState()
@@ -552,10 +554,18 @@ export const useBridgeStore = create<BridgeState>((set, get) => {
     }
 
     socket.onerror = () => { /* onclose will fire */ }
+    authenticateExtensionSocket(socket, {
+      onError: (error) => {
+        if (ws !== socket) return
+        if (error.fatal) shouldReconnect = false
+        set({ lastError: error.message })
+      },
+    })
   }
 
   return {
     status: 'disconnected',
+    lastError: null,
     devices: [],
     previewByLayoutId: {},
     effects: [],
