@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Check,
   ChevronRight,
@@ -423,6 +423,15 @@ export function StudioImportDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  if (!open) return null
+  return <StudioImportDialogSession onOpenChange={onOpenChange} />
+}
+
+function StudioImportDialogSession({
+  onOpenChange,
+}: {
+  onOpenChange: (open: boolean) => void
+}) {
   useLocale()
   const [step, setStep] = useState<Step>('select')
   const [selectedTab, setSelectedTab] = useState<StudioTabInfo | null>(null)
@@ -430,6 +439,8 @@ export function StudioImportDialog({
   const [layoutName, setLayoutName] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const refreshingRef = useRef(false)
+  const selectedTabRef = useRef<StudioTabInfo | null>(null)
 
   const scanResult = useBridgeStore(s => s.studioScanResult)
   const importResult = useBridgeStore(s => s.studioImportResult)
@@ -437,46 +448,6 @@ export function StudioImportDialog({
   const scanStudioTabs = useBridgeStore(s => s.scanStudioTabs)
   const importStudioTab = useBridgeStore(s => s.importStudioTab)
   const clearStudioResults = useBridgeStore(s => s.clearStudioResults)
-
-  // Reset on open
-  useEffect(() => {
-    if (open) {
-      setStep('select')
-      setSelectedTab(null)
-      setResolutions(new Map())
-      setLayoutName('')
-      setImporting(false)
-      setRefreshing(false)
-      scanStudioTabs()
-    } else {
-      clearStudioResults()
-    }
-  }, [open, scanStudioTabs, clearStudioResults])
-
-  // Handle import result
-  useEffect(() => {
-    if (importResult) {
-      setImporting(false)
-      if (importResult.success) {
-        onOpenChange(false)
-      }
-    }
-  }, [importResult, onOpenChange])
-
-  // Handle scan result update (for refresh)
-  useEffect(() => {
-    if (scanResult && refreshing) {
-      setRefreshing(false)
-      // Update selected tab from refreshed data
-      if (selectedTab) {
-        const updated = scanResult.tabs.find(t => t.tab_serial === selectedTab.tab_serial)
-        if (updated) {
-          setSelectedTab(updated)
-          initResolutions(updated)
-        }
-      }
-    }
-  }, [scanResult, refreshing, selectedTab])
 
   // Initialize resolutions from auto-matched data
   const initResolutions = useCallback((tab: StudioTabInfo) => {
@@ -496,7 +467,46 @@ export function StudioImportDialog({
     setResolutions(map)
   }, [])
 
+  // A session mounts fresh for every open, so local state resets through the
+  // component boundary instead of a cascade of state writes in an Effect.
+  useEffect(() => {
+    scanStudioTabs()
+    return clearStudioResults
+  }, [scanStudioTabs, clearStudioResults])
+
+  // Store subscriptions are external-system callbacks. Updating local request
+  // state here avoids an extra render pass that mirrors store data in Effects.
+  useEffect(() => {
+    return useBridgeStore.subscribe((state, previous) => {
+      const result = state.studioImportResult
+      if (!result || result === previous.studioImportResult) return
+      setImporting(false)
+      if (result.success) onOpenChange(false)
+    })
+  }, [onOpenChange])
+
+  // Listen before a refresh can be requested so a fast local response cannot
+  // arrive between setting `refreshing` and installing a one-shot Effect.
+  useEffect(() => {
+    return useBridgeStore.subscribe((state, previous) => {
+      const result = state.studioScanResult
+      if (!refreshingRef.current || !result || result === previous.studioScanResult) return
+      refreshingRef.current = false
+      setRefreshing(false)
+      const selected = selectedTabRef.current
+      if (selected) {
+        const updated = result.tabs.find(t => t.tab_serial === selected.tab_serial)
+        if (updated) {
+          selectedTabRef.current = updated
+          setSelectedTab(updated)
+          initResolutions(updated)
+        }
+      }
+    })
+  }, [initResolutions])
+
   const handleTabSelect = useCallback((tab: StudioTabInfo) => {
+    selectedTabRef.current = tab
     setSelectedTab(tab)
     setLayoutName(tab.name)
     initResolutions(tab)
@@ -564,6 +574,7 @@ export function StudioImportDialog({
   }, [])
 
   const handleRefresh = useCallback(() => {
+    refreshingRef.current = true
     setRefreshing(true)
     scanStudioTabs()
   }, [scanStudioTabs])
@@ -664,7 +675,7 @@ export function StudioImportDialog({
   const isLoading = !scanResult
 
   return (
-    <Dialog.Root open={open} onOpenChange={e => onOpenChange(e.open)} placement="center" scrollBehavior="inside">
+    <Dialog.Root open onOpenChange={e => onOpenChange(e.open)} placement="center" scrollBehavior="inside">
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>

@@ -13,7 +13,7 @@ import {
   parseColor,
 } from "@chakra-ui/react";
 import { Pipette } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 const FALLBACK_COLOR = "#ffffff";
 const COLOR_HISTORY_KEY = "skydimo-color-history";
@@ -86,16 +86,14 @@ export function ColorPicker({
   const externalColor = useMemo(() => safeParseColor(value), [value]);
   const externalHex = useMemo(() => externalColor.toString("hex"), [externalColor]);
 
-  const [internalColor, setInternalColor] = useState(() => externalColor);
-  const internalHex = useMemo(() => internalColor.toString("hex"), [internalColor]);
-
-  useEffect(() => {
-    // Only sync when external value is actually different from internal value.
-    // This way when parent component writes back the same hex during drag (especially #000000), it won't erase hue info.
-    if (externalHex !== internalHex) {
-      setInternalColor(externalColor);
-    }
-  }, [externalColor, externalHex, internalHex]);
+  const [colorState, setColorState] = useState(() => ({ color: externalColor, sourceHex: externalHex }));
+  // Keep the richer HSVA value when the parent echoes the same hex (notably
+  // black or grayscale), but derive a genuinely new external value directly
+  // during render instead of synchronizing state in an Effect.
+  const stateHex = colorState.color.toString("hex");
+  const internalColor = colorState.sourceHex === externalHex || stateHex === externalHex
+    ? colorState.color
+    : externalColor;
 
   const isEyeDropperSupported = useMemo(() => {
     // Chakra's EyeDropperTrigger depends on browser EyeDropper API.
@@ -107,23 +105,23 @@ export function ColorPicker({
 
   const handleValueChangeEnd = useCallback(
     (details: { value: ReturnType<typeof parseColor> }) => {
-      setInternalColor(details.value);
+      setColorState({ color: details.value, sourceHex: externalHex });
       const hex = details.value.toString("hex");
       onCommit?.(hex);
       setColorHistory(pushColorToHistory(hex));
     },
-    [onCommit],
+    [externalHex, onCommit],
   );
 
   const handleHistoryClick = useCallback(
     (hex: string) => {
       const color = safeParseColor(hex);
-      setInternalColor(color);
+      setColorState({ color, sourceHex: externalHex });
       onChange?.(hex);
       onCommit?.(hex);
       setColorHistory(pushColorToHistory(hex));
     },
-    [onChange, onCommit],
+    [externalHex, onChange, onCommit],
   );
 
   return (
@@ -131,7 +129,7 @@ export function ColorPicker({
       size="sm"
       value={internalColor}
       onValueChange={(details) => {
-        setInternalColor(details.value);
+        setColorState({ color: details.value, sourceHex: externalHex });
         onChange?.(details.value.toString("hex"));
       }}
       onValueChangeEnd={handleValueChangeEnd}

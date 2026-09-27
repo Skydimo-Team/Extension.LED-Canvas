@@ -9,7 +9,7 @@ import {
   parseColor,
 } from "@chakra-ui/react";
 import { Pipette, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 const FALLBACK_COLOR = "#ffffff";
 
@@ -60,14 +60,11 @@ function SwatchPicker({
 }: SwatchPickerProps) {
   const externalColor = useMemo(() => safeParseColor(value), [value]);
   const externalHex = useMemo(() => externalColor.toString("hex"), [externalColor]);
-  const [internalColor, setInternalColor] = useState(() => externalColor);
-  const internalHex = useMemo(() => internalColor.toString("hex"), [internalColor]);
-
-  useEffect(() => {
-    if (externalHex !== internalHex) {
-      setInternalColor(externalColor);
-    }
-  }, [externalColor, externalHex, internalHex]);
+  const [colorState, setColorState] = useState(() => ({ color: externalColor, sourceHex: externalHex }));
+  const stateHex = colorState.color.toString("hex");
+  const internalColor = colorState.sourceHex === externalHex || stateHex === externalHex
+    ? colorState.color
+    : externalColor;
 
   const isEyeDropperSupported = useMemo(() => {
     return typeof window !== "undefined" && "EyeDropper" in window;
@@ -79,11 +76,11 @@ function SwatchPicker({
         size="sm"
         value={internalColor}
         onValueChange={(details) => {
-          setInternalColor(details.value);
+          setColorState({ color: details.value, sourceHex: externalHex });
           onChange(details.value.toString("hex"));
         }}
         onValueChangeEnd={(details) => {
-          setInternalColor(details.value);
+          setColorState({ color: details.value, sourceHex: externalHex });
           onCommit(details.value.toString("hex"));
         }}
         disabled={disabled}
